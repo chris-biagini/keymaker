@@ -14,14 +14,25 @@ Two apps in v1, switched from an on-device menu (long-press the knob):
 
 ### Cockpit
 
-The 3×4 key grid is a live map of Hyprland workspaces 1–12.
+The 3×4 key grid is a split deck: the top two rows are Hyprland workspaces
+1–6, the bottom two rows are the tmux windows of whichever footguard session
+is currently focused.
 
-- Per-key color shows state — active, occupied, urgent — in the current
-  Omarchy theme's palette. Tap a key to jump to that workspace; hold it to
-  move the focused window there.
-- The OLED shows the focused window's app and title, the active workspace,
-  a submap indicator, and a recording dot whenever anything is screencasting
-  (a hardware privacy light).
+- Top half: per-key color shows state — active, occupied, urgent — in the
+  current Omarchy theme's identity palette. Tap a key to jump to that
+  workspace; hold it to move the focused window there.
+- Bottom half: live when a `footguard-*` window has focus, dark otherwise.
+  Each key is index-colored to match its window (same palette as the tmux
+  status bar), tapping switches windows, and a bell in an inactive window
+  blinks its key. Hold is reserved for future use.
+- The OLED header shows the active workspace inverted (`3 · macropad`, or
+  its ASCII fallback), plus REC/MUTE/submap badges. Below it: a window
+  legend (index, name, bell flag) while a footguard session is focused, or
+  the focused window's title as a marquee otherwise.
+- Top-half urgency runs BEL → tmux → foot → Hyprland → pad, entirely
+  in-band, so it works the same over mosh as it does locally; bottom-half
+  bells are read straight off tmux's own window bell flag by the daemon's
+  1 Hz poll, no foot/Hyprland hop required.
 - The knob is a volume knob (click to mute). It was always going to be a
   volume knob.
 
