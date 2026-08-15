@@ -1,0 +1,68 @@
+import asyncio
+import os
+
+import pytest
+
+import km_proto
+from keymakerd.serial_link import SerialLink
+
+
+@pytest.fixture
+def pty_pair():
+    master, slave = os.openpty()
+    os.set_blocking(master, False)
+    yield master, os.ttyname(slave)
+    for fd in (master, slave):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+async def _drain(master):
+    await asyncio.sleep(0.15)
+    try:
+        return os.read(master, 4096)
+    except BlockingIOError:
+        return b""
+
+
+def test_receives_messages_and_calls_on_up(pty_pair):
+    master, slave_path = pty_pair
+    got, ups = [], []
+
+    async def scenario():
+        link = SerialLink(slave_path, on_msg=got.append,
+                         on_up=lambda: ups.append(1) or asyncio.sleep(0))
+        task = asyncio.create_task(link.run())
+        await asyncio.sleep(0.15)
+        os.write(master, km_proto.encode({"t": "hello", "fw": "0.1.0"}))
+        await asyncio.sleep(0.15)
+        assert link.send({"t": "ping"}) is True
+        out = await _drain(master)
+        task.cancel()
+        return out
+
+    out = asyncio.run(scenario())
+    assert got == [{"t": "hello", "fw": "0.1.0"}]
+    assert ups == [1]
+    assert b'{"t":"ping"}\n' in out
+
+
+def test_send_while_down_returns_false():
+    link = SerialLink("/dev/does-not-exist", on_msg=lambda m: None,
+                     on_up=lambda: asyncio.sleep(0))
+    assert link.send({"t": "ping"}) is False
+
+
+def test_missing_device_keeps_retrying():
+    async def scenario():
+        link = SerialLink("/dev/does-not-exist", on_msg=lambda m: None,
+                         on_up=lambda: asyncio.sleep(0), reconnect_s=0.05)
+        task = asyncio.create_task(link.run())
+        await asyncio.sleep(0.3)          # several failed attempts; no crash
+        alive = not task.done()
+        task.cancel()
+        return alive
+
+    assert asyncio.run(scenario()) is True
