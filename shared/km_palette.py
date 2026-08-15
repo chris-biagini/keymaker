@@ -8,6 +8,12 @@ DEFAULT = {
 
 OCCUPIED_SCALE = 0.25
 
+# Canonical Okabe-Ito hues, canonical order — window index N always gets bin N,
+# on the pad AND in the tmux status bar (which uses the hue-locked WSID
+# variants of these same bins). LEDs are emissive, so the saturated canonical
+# values render truest; terminal text needs the contrast-tuned variants.
+INDEX_BINS = ("E69F00", "56B4E9", "009E73", "F0E442", "0072B2", "D55E00")
+
 
 def hex_to_int(s):
     s = s.lstrip("#")
@@ -45,3 +51,15 @@ def ws_key_color(state, ws_hex, pal, phase=0.0):
     if state == "occupied":
         return scale(c, OCCUPIED_SCALE)
     return 0
+
+
+def ctx_key_color(item, pal, phase=0.0):
+    """Bottom-half key color for one ctx slot item, or None for an empty slot."""
+    if item is None:
+        return 0
+    if item.get("bell"):
+        return scale(_c(pal, "red"), 0.25 + 0.75 * phase)
+    c = hex_to_int(INDEX_BINS[(item["i"] - 1) % len(INDEX_BINS)])
+    if item.get("active"):
+        return c
+    return scale(c, OCCUPIED_SCALE)
