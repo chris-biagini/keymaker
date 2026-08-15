@@ -1883,3 +1883,24 @@ git push
 1. `pytest -q` → all green.
 2. Full acceptance checklist from Task 12 Step 5, this time with the daemon under systemd.
 3. Reboot test: reboot the box; daemon comes up with the session; pad shows live state without any manual action.
+
+## Post-execution deviations (ruled during execution)
+
+- Task 3: LineCodec also drops complete oversize lines (fix f3a6dd3); the plan's
+  reference code only bounded unterminated buffers.
+- Task 2: rule file is `62-keymaker.rules` with `TAG+="uaccess"` — 99- sorted
+  after 73-seat-late (uaccess ignored) and 60-keymaker sorted before
+  60-serial.rules (ID_USB_INTERFACE_NUM unset). 62 is the working window.
+- Task 11 smoke: ping→pong probe instead of listening for the boot hello (which
+  fires before any host port is open).
+- Task 12b (user-requested): global `pixels.brightness = 0.3`,
+  `OCCUPIED_SCALE = 0.25`, and per-workspace Okabe-Ito colors parsed from the
+  pango span embedded in Hyprland workspace names (`ws` msg gained `colors`).
+  Root cause of the "white keys" field report: brightness 1.0 + desaturated
+  accent = white glare.
+- Ping direction: daemon pings, pad pongs; the daemon detects link loss via
+  serial errors/EOF rather than pong timeouts. Simpler than the spec table's
+  "both" and sound.
+- Fix wave: firmware on_msg guard, daemon per-message guard + palette hex
+  validation, KeyTracker reset on app show, find_instance_dir OSError guard,
+  StartLimitIntervalSec=0.
