@@ -101,7 +101,7 @@ class Cockpit(App):
         ident = (str(active) + " · " + name) if name else ("ws " + str(active))
         self.screen.set_header(ident + badges)
         if self.ctx.get("mode") == "tmux":
-            lines = ctx_legend(self.ctx.get("items", []))
+            lines = ctx_legend(list(self._ctx_by_i.values()))
             self.screen.line1.text = lines[0]
             self.screen.line2.text = lines[1]
         else:
