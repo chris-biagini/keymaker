@@ -88,7 +88,7 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     # The link-up snapshot goes out before the first Hyprland refresh, so the
     # FIRST ws msg is the default state; the refreshed one arrives last.
     ws = [m for m in msgs if m["t"] == "ws"][-1]
-    assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": []}
+    assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": [], "colors": {}}
     assert "dispatch workspace 3" in dispatched
     assert "dispatch movetoworkspacesilent 1" in dispatched
 

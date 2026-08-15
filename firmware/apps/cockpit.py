@@ -13,7 +13,7 @@ class Cockpit(App):
     name = "cockpit"
 
     def __init__(self):
-        self.ws = {"active": 1, "occupied": [], "urgent": []}
+        self.ws = {"active": 1, "occupied": [], "urgent": [], "colors": {}}
         self.win = {"cls": "", "title": ""}
         self.flags = {"submap": "", "screencast": False, "muted": False}
         self.palette = dict(km_palette.DEFAULT)
@@ -68,9 +68,10 @@ class Cockpit(App):
     def _draw_leds(self, now):
         phase = (now % 1000) / 1000
         phase = phase * 2 if phase < 0.5 else (1 - phase) * 2   # triangle wave
+        colors = self.ws.get("colors", {})
         for n in range(12):
-            self.pad.pixels[n] = km_palette.key_color(
-                self._key_state(n), self.palette, phase)
+            self.pad.pixels[n] = km_palette.ws_key_color(
+                self._key_state(n), colors.get(str(n + 1)), self.palette, phase)
 
     def _draw_text(self, now):
         if not self.link.up:

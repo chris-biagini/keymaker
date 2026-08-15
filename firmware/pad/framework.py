@@ -7,6 +7,7 @@ from .link import Link
 from .ui import Screen
 
 HOLD_MENU_MS = 600
+BRIGHTNESS = 0.3
 
 
 class App:
@@ -39,6 +40,7 @@ class App:
 def run(macropad, apps):
     link = Link(ticks_ms, ticks_diff)
     screen = Screen(macropad.display)
+    macropad.pixels.brightness = BRIGHTNESS
     for app in apps:
         app.attach(macropad, link, screen)
 

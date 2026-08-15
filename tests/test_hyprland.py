@@ -29,7 +29,7 @@ def test_find_instance_dir_picks_dir_with_socket(tmp_path):
 def test_refresh_produces_ws_and_win_messages_once():
     s = HyprState()
     msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": []} in msgs
+    assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": [], "colors": {}} in msgs
     assert {"t": "win", "cls": "foot", "title": "vim ~/notes.md"} in msgs
     assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) == []   # no change, no msgs
 
@@ -59,3 +59,24 @@ def test_snapshot_always_returns_both_messages():
     s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
     ts = sorted(m["t"] for m in s.snapshot())
     assert ts == ["win", "ws"]
+
+
+def test_ws_color_parses_workspace_identity_span():
+    from keymakerd.hyprland import ws_color
+    assert ws_color("2·<span foreground='#E14B00'>mirepoix</span>") == "e14b00"
+    assert ws_color('x<span foreground="#5AB4FF">y</span>') == "5ab4ff"
+    assert ws_color("plain-name") is None
+    assert ws_color("") is None
+    assert ws_color(None) is None
+
+
+def test_refresh_includes_workspace_colors():
+    s = HyprState()
+    wss = [
+        {"id": 2, "windows": 1, "name": "2·<span foreground='#E14B00'>mirepoix</span>"},
+        {"id": 3, "windows": 1, "name": "3·<span foreground='#5AB4FF'>macropad</span>"},
+        {"id": 4, "windows": 1, "name": "4"},
+    ]
+    msgs = s.refresh(wss, {"id": 2}, None, [])
+    ws = next(m for m in msgs if m["t"] == "ws")
+    assert ws["colors"] == {"2": "e14b00", "3": "5ab4ff"}

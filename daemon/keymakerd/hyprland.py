@@ -1,6 +1,16 @@
 """Hyprland IPC: instance discovery, one-shot requests, event stream state."""
 import asyncio
+import re
 from pathlib import Path
+
+_WS_COLOR_RE = re.compile(r"foreground=['\"]#?([0-9a-fA-F]{6})")
+
+
+def ws_color(name):
+    """Workspace-identity color embedded in a workspace name, or None."""
+    m = _WS_COLOR_RE.search(name or "")
+    return m.group(1).lower() if m else None
+
 
 REFRESH_EVENTS = {
     "workspace", "workspacev2", "focusedmon", "openwindow", "closewindow",
@@ -40,6 +50,7 @@ class HyprState:
         self.active = 1
         self.occupied = []
         self.urgent_ws = []
+        self.colors = {}
         self.cls = ""
         self.title = ""
         self.submap = ""
@@ -75,8 +86,13 @@ class HyprState:
             if addr_ws.get(a) is not None and addr_ws[a] != active
         }
         urgent = sorted({addr_ws[a] for a in self._urgent_addrs})
-        if (active, occupied, urgent) != (self.active, self.occupied, self.urgent_ws):
-            self.active, self.occupied, self.urgent_ws = active, occupied, urgent
+        colors = {}
+        for w in workspaces:
+            c = ws_color(w.get("name"))
+            if c is not None:
+                colors[str(w["id"])] = c
+        if (active, occupied, urgent, colors) != (self.active, self.occupied, self.urgent_ws, self.colors):
+            self.active, self.occupied, self.urgent_ws, self.colors = active, occupied, urgent, colors
             msgs.append(self._ws_msg())
         cls = (active_win or {}).get("class", "")
         title = (active_win or {}).get("title", "")[:60]
@@ -89,8 +105,8 @@ class HyprState:
         return [self._ws_msg(), self._win_msg()]
 
     def _ws_msg(self):
-        return {"t": "ws", "active": self.active,
-                "occupied": self.occupied, "urgent": self.urgent_ws}
+        return {"t": "ws", "active": self.active, "occupied": self.occupied,
+                "urgent": self.urgent_ws, "colors": self.colors}
 
     def _win_msg(self):
         return {"t": "win", "cls": self.cls, "title": self.title}
