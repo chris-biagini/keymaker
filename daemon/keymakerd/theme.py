@@ -1,7 +1,10 @@
 """Omarchy theme → palette messages. Contract: colors.toml keys + theme path pair."""
 import asyncio
+import re
 import tomllib
 from pathlib import Path
+
+_HEX = re.compile(r"^[0-9a-fA-F]{6}$")
 
 # Semantic keys with 3.8.4 ANSI fallbacks (observed on nexus: no red/muted keys).
 _FALLBACKS = {
@@ -26,15 +29,17 @@ def load_palette(theme_dir):
     f = Path(theme_dir) / "colors.toml"
     try:
         data = tomllib.loads(f.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError):
         return None
     pal = {"t": "palette", "name": Path(theme_dir).name}
     for dst, keys in _FALLBACKS.items():
         for k in keys:
             v = data.get(k)
-            if isinstance(v, str) and v:
-                pal[dst] = v.lstrip("#").lower()
-                break
+            if isinstance(v, str):
+                h = v.lstrip("#")
+                if _HEX.match(h):
+                    pal[dst] = h.lower()
+                    break
     return pal if "accent" in pal else None
 
 

@@ -2,6 +2,7 @@
 Description=Keymaker macropad daemon
 After=graphical-session.target
 PartOf=graphical-session.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec

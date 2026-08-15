@@ -55,6 +55,30 @@ def test_send_while_down_returns_false():
     assert link.send({"t": "ping"}) is False
 
 
+def test_bad_message_does_not_drop_rest_of_batch(pty_pair):
+    master, slave_path = pty_pair
+    got, calls = [], {"n": 0}
+
+    def on_msg(m):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        got.append(m)
+
+    async def scenario():
+        link = SerialLink(slave_path, on_msg=on_msg,
+                         on_up=lambda: asyncio.sleep(0))
+        task = asyncio.create_task(link.run())
+        await asyncio.sleep(0.15)
+        chunk = km_proto.encode({"t": "a"}) + km_proto.encode({"t": "b"})
+        os.write(master, chunk)
+        await asyncio.sleep(0.15)
+        task.cancel()
+
+    asyncio.run(scenario())
+    assert got == [{"t": "b"}]
+
+
 def test_missing_device_keeps_retrying():
     async def scenario():
         link = SerialLink("/dev/does-not-exist", on_msg=lambda m: None,

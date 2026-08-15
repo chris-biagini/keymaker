@@ -20,6 +20,7 @@ class Cockpit(App):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
 
     def on_show(self):
+        self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
         self._draw_all(ticks_ms())
 
     def on_msg(self, msg):

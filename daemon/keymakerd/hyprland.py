@@ -20,11 +20,15 @@ REFRESH_EVENTS = {
 
 
 def find_instance_dir(runtime):
-    best = None
+    best = best_m = None
     for d in Path(runtime).glob("hypr/*"):
-        if (d / ".socket.sock").exists():
-            if best is None or d.stat().st_mtime > best.stat().st_mtime:
-                best = d
+        try:
+            if (d / ".socket.sock").exists():
+                m = d.stat().st_mtime
+                if best is None or m > best_m:
+                    best, best_m = d, m
+        except OSError:
+            continue
     return best
 
 

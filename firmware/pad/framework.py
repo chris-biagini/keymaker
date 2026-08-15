@@ -84,7 +84,10 @@ def run(macropad, apps):
             event = macropad.keys.events.get()
 
         for m in link.poll(now):
-            apps[active].on_msg(m)
+            try:
+                apps[active].on_msg(m)
+            except Exception as e:
+                print("on_msg error:", repr(e))
 
         if menu_idx is not None:
             screen.header.text = "apps"

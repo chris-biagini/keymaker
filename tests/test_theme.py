@@ -50,3 +50,21 @@ def test_load_palette_bad_or_missing_file(tmp_path):
     assert load_palette(d) is None
     (d / "colors.toml").write_text("not [ valid toml")
     assert load_palette(d) is None
+
+
+def test_load_palette_invalid_accent_with_no_fallback_is_none(tmp_path):
+    d = _theme(tmp_path, "bad-accent", 'accent = "light blue"\nred = "#f85525"\n')
+    assert load_palette(d) is None
+
+
+def test_load_palette_invalid_value_skipped_fallback_chain_continues(tmp_path):
+    d = _theme(tmp_path, "fallback",
+               'accent = "#112233"\nred = "nope"\ncolor1 = "#aa0000"\n')
+    pal = load_palette(d)
+    assert pal["red"] == "aa0000"
+
+
+def test_load_palette_invalid_utf8_returns_none(tmp_path):
+    d = tmp_path / "badutf8"; d.mkdir()
+    (d / "colors.toml").write_bytes(b'accent = "#112233"\n\xff\xfe invalid utf8')
+    assert load_palette(d) is None

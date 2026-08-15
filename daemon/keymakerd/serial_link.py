@@ -1,5 +1,6 @@
 """Serial transport to the pad: pyserial + asyncio add_reader + reconnect."""
 import asyncio
+import logging
 
 import serial
 
@@ -55,12 +56,15 @@ class SerialLink:
         except (serial.SerialException, OSError, TypeError):
             self._drop()
             return
-        if data == b"" :
+        if data == b"":
             # pty EOF shows as readable-with-empty; real ttyACM raises instead
             self._drop()
             return
         for msg in self._codec.feed(data):
-            self.on_msg(msg)
+            try:
+                self.on_msg(msg)
+            except Exception:
+                logging.exception("keymakerd: on_msg failed for %r", msg)
 
     def _drop(self):
         if self._ser is None:
