@@ -27,7 +27,7 @@ class LineCodec:
             if self._overflow:              # tail of an oversize line
                 self._overflow = False
                 continue
-            if not line:
+            if not line or len(line) > self._max:
                 continue
             try:
                 m = json.loads(line)

@@ -26,3 +26,10 @@ def test_oversize_line_dropped_and_recovers():
     c = km_proto.LineCodec(max_line=32)
     assert c.feed(b"x" * 100) == []
     assert c.feed(b'y\n{"t":"ok"}\n') == [{"t": "ok"}]
+
+
+def test_oversize_complete_line_dropped():
+    c = km_proto.LineCodec(max_line=32)
+    big = b'{"t":"ok","pad":"' + b"x" * 100 + b'"}\n'
+    assert c.feed(big) == []
+    assert c.feed(b'{"t":"ok"}\n') == [{"t": "ok"}]
