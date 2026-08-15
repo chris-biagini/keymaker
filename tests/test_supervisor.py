@@ -196,6 +196,32 @@ def test_context_watcher_filters_slots_and_degrades(monkeypatch, tmp_path):
     assert ctx == []                                # none == initial state: no emission
 
 
+def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
+    import keymakerd.__main__ as main_mod
+    from keymakerd import tmux as tmuxmod
+
+    async def boom(session):
+        raise RuntimeError("contract violation")
+
+    async def scenario():
+        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
+        monkeypatch.setattr(tmuxmod, "list_windows", boom)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        sup.state.cls = "footguard-x"
+        task = asyncio.create_task(sup._context())
+        await asyncio.sleep(0.2)
+        alive = not task.done()
+        task.cancel()
+        return alive, [m for m in sent if m["t"] == "ctx"]
+
+    alive, ctx = asyncio.run(scenario())
+    assert alive                      # the watcher survived the raise
+    assert ctx == []                  # degraded to none == initial state, no emission
+
+
 def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
     from keymakerd import tmux as tmuxmod
     selected = []

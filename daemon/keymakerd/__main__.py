@@ -166,7 +166,11 @@ class Supervisor:
             new = _ctx_none()
             if cls.startswith("footguard-"):
                 session = cls.removeprefix("footguard-")
-                items = await tmux.list_windows(session)
+                try:
+                    items = await tmux.list_windows(session)
+                except Exception as e:
+                    print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
+                    items = None
                 if items is not None:
                     new = {"t": "ctx", "mode": "tmux", "session": session,
                            "items": [w for w in items if 1 <= w["i"] <= 6]}
