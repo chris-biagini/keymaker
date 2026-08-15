@@ -90,8 +90,9 @@ def run(macropad, apps):
                 print("on_msg error:", repr(e))
 
         if menu_idx is not None:
-            screen.header.text = "apps"
-            screen.title.text = "> " + apps[menu_idx].name
+            screen.set_header("apps")
+            screen.line1.text = "> " + apps[menu_idx].name
+            screen.line2.text = ""
             screen.footer.text = "click to switch"
         else:
             apps[active].tick(now)
