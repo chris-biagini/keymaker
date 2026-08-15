@@ -80,7 +80,7 @@ class Supervisor:
             if n < 6:                                     # top half: workspaces 1-6
                 verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
                 self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
-            elif msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
+            elif 6 <= n <= 11 and msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
                 self._spawn(self._select_window(self.ctx["session"], n - 5), "tmux-select")
         elif t == "dial":
             self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
@@ -168,12 +168,11 @@ class Supervisor:
                 session = cls.removeprefix("footguard-")
                 try:
                     items = await tmux.list_windows(session)
+                    if items is not None:
+                        new = {"t": "ctx", "mode": "tmux", "session": session,
+                               "items": [w for w in items if 1 <= w["i"] <= 6]}
                 except Exception as e:
                     print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
-                    items = None
-                if items is not None:
-                    new = {"t": "ctx", "mode": "tmux", "session": session,
-                           "items": [w for w in items if 1 <= w["i"] <= 6]}
             if new != self.ctx:
                 self.ctx = new
                 self.link.send(new)

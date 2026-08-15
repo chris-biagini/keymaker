@@ -241,6 +241,8 @@ def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
         sup._on_pad_msg({"t": "key", "n": 7, "act": "hold"})   # reserved: no-op
         sup.ctx = {"t": "ctx", "mode": "none", "session": None, "items": []}
         sup._on_pad_msg({"t": "key", "n": 8, "act": "tap"})    # mode none: ignored
+        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": []}
+        sup._on_pad_msg({"t": "key", "n": 13, "act": "tap"})   # out of range: ignored
         await asyncio.sleep(0.05)
         return selected
 

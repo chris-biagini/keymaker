@@ -54,7 +54,7 @@ def ws_key_color(state, ws_hex, pal, phase=0.0):
 
 
 def ctx_key_color(item, pal, phase=0.0):
-    """Bottom-half key color for one ctx slot item, or None for an empty slot."""
+    """Bottom-half key color for one ctx slot item; None (empty slot) -> off."""
     if item is None:
         return 0
     if item.get("bell"):

@@ -27,3 +27,4 @@ class Screen:
         self.set_header("keymaker")
         self.line1.text = "no link"
         self.line2.text = ""
+        self.footer.text = ""
