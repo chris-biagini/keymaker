@@ -4,12 +4,24 @@ import re
 from pathlib import Path
 
 _WS_COLOR_RE = re.compile(r"foreground=['\"]#?([0-9a-fA-F]{6})")
+_TAG_RE = re.compile(r"<[^>]*>")
+_ID_PREFIX_RE = re.compile(r"^\d+·")
 
 
 def ws_color(name):
     """Workspace-identity color embedded in a workspace name, or None."""
     m = _WS_COLOR_RE.search(name or "")
     return m.group(1).lower() if m else None
+
+
+def ws_label(name):
+    """Human label from a workspace name (identity markup stripped), or None."""
+    if not name:
+        return None
+    text = _ID_PREFIX_RE.sub("", _TAG_RE.sub("", name)).strip()
+    if not text or text.isdigit():
+        return None
+    return text
 
 
 REFRESH_EVENTS = {
@@ -55,6 +67,7 @@ class HyprState:
         self.occupied = []
         self.urgent_ws = []
         self.colors = {}
+        self.names = {}
         self.cls = ""
         self.title = ""
         self.submap = ""
@@ -95,8 +108,15 @@ class HyprState:
             c = ws_color(w.get("name"))
             if c is not None:
                 colors[str(w["id"])] = c
-        if (active, occupied, urgent, colors) != (self.active, self.occupied, self.urgent_ws, self.colors):
-            self.active, self.occupied, self.urgent_ws, self.colors = active, occupied, urgent, colors
+        names = {}
+        for w in workspaces:
+            lbl = ws_label(w.get("name"))
+            if lbl is not None:
+                names[str(w["id"])] = lbl
+        if (active, occupied, urgent, colors, names) != (
+                self.active, self.occupied, self.urgent_ws, self.colors, self.names):
+            self.active, self.occupied, self.urgent_ws, self.colors, self.names = (
+                active, occupied, urgent, colors, names)
             msgs.append(self._ws_msg())
         cls = (active_win or {}).get("class", "")
         title = (active_win or {}).get("title", "")[:60]
@@ -110,7 +130,8 @@ class HyprState:
 
     def _ws_msg(self):
         return {"t": "ws", "active": self.active, "occupied": self.occupied,
-                "urgent": self.urgent_ws, "colors": self.colors}
+                "urgent": self.urgent_ws, "colors": self.colors,
+                "names": self.names}
 
     def _win_msg(self):
         return {"t": "win", "cls": self.cls, "title": self.title}

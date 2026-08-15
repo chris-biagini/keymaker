@@ -29,7 +29,7 @@ def test_find_instance_dir_picks_dir_with_socket(tmp_path):
 def test_refresh_produces_ws_and_win_messages_once():
     s = HyprState()
     msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": [], "colors": {}} in msgs
+    assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": [], "colors": {}, "names": {}} in msgs
     assert {"t": "win", "cls": "foot", "title": "vim ~/notes.md"} in msgs
     assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) == []   # no change, no msgs
 
@@ -80,3 +80,24 @@ def test_refresh_includes_workspace_colors():
     msgs = s.refresh(wss, {"id": 2}, None, [])
     ws = next(m for m in msgs if m["t"] == "ws")
     assert ws["colors"] == {"2": "e14b00", "3": "5ab4ff"}
+
+
+def test_ws_label_strips_identity_markup():
+    from keymakerd.hyprland import ws_label
+    assert ws_label("2·<span foreground='#E14B00'>mirepoix</span>") == "mirepoix"
+    assert ws_label("plain-name") == "plain-name"
+    assert ws_label("4") is None            # unnamed: bare id
+    assert ws_label("") is None
+    assert ws_label(None) is None
+
+
+def test_refresh_includes_workspace_names():
+    s = HyprState()
+    wss = [
+        {"id": 2, "windows": 1, "name": "2·<span foreground='#E14B00'>mirepoix</span>"},
+        {"id": 3, "windows": 1, "name": "3·<span foreground='#5AB4FF'>macropad</span>"},
+        {"id": 4, "windows": 1, "name": "4"},
+    ]
+    msgs = s.refresh(wss, {"id": 2}, None, [])
+    ws = next(m for m in msgs if m["t"] == "ws")
+    assert ws["names"] == {"2": "mirepoix", "3": "macropad"}
