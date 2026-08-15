@@ -29,6 +29,18 @@ class Supervisor:
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
+        self._tasks = set()
+
+    def _spawn(self, coro, what):
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+
+        def _done(t):
+            self._tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                print(f"keymakerd: {what} failed: {t.exception()!r}", flush=True)
+
+        task.add_done_callback(_done)
 
     # ---- outbound -------------------------------------------------
     def _flags_msg(self):
@@ -41,6 +53,10 @@ class Supervisor:
             self.link.send(self.palette)
         for m in self.state.snapshot():
             self.link.send(m)
+        try:
+            _, self.muted = await volume.status()
+        except (OSError, ValueError, IndexError):
+            pass
         self.link.send(self._flags_msg())
 
     async def _on_palette(self, pal):
@@ -51,15 +67,15 @@ class Supervisor:
     def _on_pad_msg(self, msg):
         t = msg.get("t")
         if t == "hello":
-            asyncio.ensure_future(self._on_link_up())
+            self._spawn(self._on_link_up(), "link-up")
         elif t == "key":
             n = int(msg.get("n", 0)) + 1                  # key 0 → workspace 1
             verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
-            asyncio.ensure_future(self._dispatch(f"dispatch {verb} {n}"))
+            self._spawn(self._dispatch(f"dispatch {verb} {n}"), "dispatch")
         elif t == "dial":
-            asyncio.ensure_future(self._volume(int(msg.get("d", 0)), False))
+            self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
         elif t == "click":
-            asyncio.ensure_future(self._volume(0, True))
+            self._spawn(self._volume(0, True), "volume")
 
     async def _dispatch(self, cmd):
         if self._instance is not None:
@@ -69,13 +85,13 @@ class Supervisor:
                 self._instance = None
 
     async def _volume(self, direction, toggle):
-        if toggle:
-            await volume.toggle_mute()
-        elif direction:
-            await volume.step(direction)
         try:
+            if toggle:
+                await volume.toggle_mute()
+            elif direction:
+                await volume.step(direction)
             _, self.muted = await volume.status()
-        except (ValueError, IndexError):
+        except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
 

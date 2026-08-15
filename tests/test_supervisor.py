@@ -91,3 +91,45 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": []}
     assert "dispatch workspace 3" in dispatched
     assert "dispatch movetoworkspacesilent 1" in dispatched
+
+
+def test_link_up_reports_current_mute_state(monkeypatch, tmp_path):
+    from keymakerd import volume as vol
+    from keymakerd.__main__ import Config, Supervisor
+
+    async def fake_status():
+        return (0.4, True)
+
+    async def scenario():
+        monkeypatch.setattr(vol, "status", fake_status)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        await sup._on_link_up()
+        return sent
+
+    sent = asyncio.run(scenario())
+    flags = next(m for m in sent if m["t"] == "flags")
+    assert flags["muted"] is True
+
+
+def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
+    from keymakerd import volume as vol
+    from keymakerd.__main__ import Config, Supervisor
+
+    async def boom(*a):
+        raise OSError("wpctl missing")
+
+    async def scenario():
+        monkeypatch.setattr(vol, "toggle_mute", boom)
+        monkeypatch.setattr(vol, "status", boom)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        await sup._volume(0, True)
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert any(m["t"] == "flags" for m in sent)
