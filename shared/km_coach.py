@@ -46,3 +46,112 @@ def loop_grid_ms(stage_idx, bpm, swing=50):
             out.append((instr, t))
     out.sort(key=lambda p: (p[1], p[0]))
     return out
+
+
+def _pstdev(xs):
+    m = sum(xs) / len(xs)
+    return (sum((x - m) * (x - m) for x in xs) / len(xs)) ** 0.5
+
+
+class SessionScorer:
+    """Incremental hit matcher/scorer; times are float ms since epoch.
+
+    add_expected must be called in nondecreasing time order — both scans
+    below rely on it to stay O(window) on the RP2040.
+    """
+
+    def __init__(self, variance=False):
+        self.variance = variance
+        self.pending = []          # [instr, t_ms, resolved]
+        self.counts = {"greens": 0, "ambers": 0, "reds": 0,
+                       "misses": 0, "strays": 0}
+        self.offsets = []          # variance-mode snare offsets
+        self.grid_greens = 0
+        self.grid_expected = 0
+        self.grid_resolved = 0
+        self.snare_expected = 0
+        self._idx = 0              # first entry that may still be open
+
+    def _grid(self, instr):
+        return not (self.variance and instr == SNARE)
+
+    def add_expected(self, instr, t_ms):
+        self.pending.append([instr, t_ms, False])
+        if self._grid(instr):
+            self.grid_expected += 1
+        else:
+            self.snare_expected += 1
+
+    def on_hit(self, instr, t_ms):
+        best = None
+        best_off = 0.0
+        for k in range(self._idx, len(self.pending)):
+            e = self.pending[k]
+            if e[1] > t_ms + MISS_MS:
+                break
+            if e[2] or e[0] != instr:
+                continue
+            off = t_ms - e[1]
+            if off < -MISS_MS or off > MISS_MS:
+                continue
+            if best is None or abs(off) < abs(best_off):
+                best, best_off = e, off
+        if best is None:
+            self.counts["strays"] += 1
+            return "stray"
+        best[2] = True
+        if not self._grid(instr):
+            self.offsets.append(best_off)
+            self.counts["greens"] += 1
+            return "green"
+        self.grid_resolved += 1
+        if abs(best_off) <= GREEN_MS:
+            self.counts["greens"] += 1
+            self.grid_greens += 1
+            return "green"
+        if best_off < 0:
+            self.counts["reds"] += 1
+            return "red"
+        self.counts["ambers"] += 1
+        return "amber"
+
+    def expire(self, now_ms):
+        missed = []
+        while self._idx < len(self.pending):
+            e = self.pending[self._idx]
+            if now_ms - e[1] <= MISS_MS:
+                break
+            if not e[2]:
+                e[2] = True
+                self.counts["misses"] += 1
+                if self._grid(e[0]):
+                    self.grid_resolved += 1
+                missed.append((e[0], e[1]))
+            self._idx += 1
+        return missed
+
+    def live_accuracy(self):
+        denom = self.grid_resolved + self.counts["strays"]
+        if denom == 0:
+            return None
+        return self.grid_greens / denom
+
+    def finalize(self):
+        self.expire(1e12)
+        out = dict(self.counts)
+        denom = self.grid_expected + self.counts["strays"]
+        acc = self.grid_greens / denom if denom else 0.0
+        out["accuracy"] = acc
+        if not self.variance:
+            out["score"] = acc
+            return out
+        n = len(self.offsets)
+        mean = sum(self.offsets) / n if n else 0.0
+        var_score = 0.0
+        if n and mean >= LATE_GATE_MS:
+            var_score = max(0.0, 1.0 - _pstdev(self.offsets) / VAR_DIV_MS)
+            if self.snare_expected:
+                var_score *= float(n) / self.snare_expected
+        out["mean_offset"] = mean
+        out["score"] = min(acc, var_score)
+        return out
