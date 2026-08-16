@@ -98,7 +98,7 @@ class Cockpit(App):
             badges += " [" + self.flags["submap"] + "]"
         active = self.ws["active"]
         name = self.ws.get("names", {}).get(str(active))
-        ident = (str(active) + " · " + name) if name else ("ws " + str(active))
+        ident = (str(active) + " - " + name) if name else ("ws " + str(active))
         self.screen.set_header(ident + badges)
         if self.ctx.get("mode") == "tmux":
             lines = ctx_legend(list(self._ctx_by_i.values()))

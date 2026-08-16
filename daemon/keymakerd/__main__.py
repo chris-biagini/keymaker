@@ -18,6 +18,14 @@ def _ctx_none():
     return {"t": "ctx", "mode": "none", "session": None, "items": []}
 
 
+def _session_name(label):
+    """footguard's fg_session_name, ported: tmux/systemd-safe session name."""
+    s = label
+    for ch in ".:/":
+        s = s.replace(ch, "-")
+    return "-".join(s.split()).strip("-")
+
+
 @dataclass
 class Config:
     device: str = os.environ.get("KEYMAKER_DEVICE", "/dev/keymaker-data")
@@ -165,12 +173,19 @@ class Supervisor:
             cls = self.state.cls
             new = _ctx_none()
             if cls.startswith("footguard-"):
-                session = cls.removeprefix("footguard-")
+                candidates = [cls.removeprefix("footguard-")]
+                label = self.state.names.get(str(self.state.active))
+                if label:
+                    fallback = _session_name(label)
+                    if fallback and fallback not in candidates:
+                        candidates.append(fallback)
                 try:
-                    items = await tmux.list_windows(session)
-                    if items is not None:
-                        new = {"t": "ctx", "mode": "tmux", "session": session,
-                               "items": [w for w in items if 1 <= w["i"] <= 6]}
+                    for session in candidates:
+                        items = await tmux.list_windows(session)
+                        if items is not None:
+                            new = {"t": "ctx", "mode": "tmux", "session": session,
+                                   "items": [w for w in items if 1 <= w["i"] <= 6]}
+                            break
                 except Exception as e:
                     print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
             if new != self.ctx:

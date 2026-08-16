@@ -222,6 +222,45 @@ def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
     assert ctx == []                  # degraded to none == initial state, no emission
 
 
+def test_session_name_sanitizes_like_footguard():
+    from keymakerd.__main__ import _session_name
+    assert _session_name("keymaker") == "keymaker"
+    assert _session_name("wacky sax") == "wacky-sax"
+    assert _session_name("a.b:c/d") == "a-b-c-d"
+    assert _session_name(" x ") == "x"
+
+
+def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_path):
+    # Rename case: class frozen at footguard-macropad, session now "keymaker".
+    import keymakerd.__main__ as main_mod
+    from keymakerd import tmux as tmuxmod
+
+    async def lister(session):
+        if session == "keymaker":
+            return [{"i": 1, "name": "vim", "active": True, "bell": False}]
+        return None
+
+    async def scenario():
+        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
+        monkeypatch.setattr(tmuxmod, "list_windows", lister)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        sup.state.cls = "footguard-macropad"
+        sup.state.active = 3
+        sup.state.names = {"3": "keymaker"}
+        task = asyncio.create_task(sup._context())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        return [m for m in sent if m["t"] == "ctx"]
+
+    ctx = asyncio.run(scenario())
+    assert ctx and ctx[0]["mode"] == "tmux"
+    assert ctx[0]["session"] == "keymaker"
+    assert ctx[0]["items"][0]["name"] == "vim"
+
+
 def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
     from keymakerd import tmux as tmuxmod
     selected = []
