@@ -84,9 +84,12 @@ off-beat hat moves from `Q/2` (straight) to `(s/100)·Q`, `s ∈ [50, 67]`
   the session counts **only if mean offset ≥ +10 ms** (you must actually be
   late, else score = 0 with OLED hint "drag it"). Session score =
   `min(kick_accuracy, variance_score)`.
-- **Unlock rule**: stage n+1 unlocks when stage n has ≥ 3 recorded sessions
-  and the mean score of the 3 most recent ≥ 0.85. Any BPM counts.
-  Stages 0 and 1 are always available.
+- **Unlock rule**: stage n+1 unlocks once stage n's history contains **any 3
+  consecutive sessions** with mean score ≥ 0.85. Any BPM counts. Stages 0
+  and 1 are always available. Because a passing window can never be removed
+  by later sessions, progress is monotone — replaying an earlier stage badly
+  never re-locks anything — while state stays fully derived from history
+  (nothing stored). Graduation ratchets the same way.
 - **Graduation**: stage 5 satisfies the same rule → graduation card. State
   is derived, never stored: `summarize(history)` recomputes everything.
 
