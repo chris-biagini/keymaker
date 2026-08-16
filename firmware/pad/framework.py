@@ -21,6 +21,9 @@ class App:
     def on_show(self):
         pass
 
+    def on_hide(self):
+        pass
+
     def on_key_event(self, n, pressed, now):
         pass
 
@@ -68,6 +71,10 @@ def run(macropad, apps):
                     apps[active].on_click()
         if enc_tracker.tick(now):               # long press → open menu
             menu_idx = active
+            try:
+                apps[active].on_hide()
+            except Exception as e:
+                print("on_hide error:", repr(e))
 
         pos = macropad.encoder
         delta, last_pos = pos - last_pos, pos
@@ -80,7 +87,8 @@ def run(macropad, apps):
         event = macropad.keys.events.get()
         while event is not None:
             if menu_idx is None:
-                apps[active].on_key_event(event.key_number, event.pressed, now)
+                apps[active].on_key_event(event.key_number, event.pressed,
+                                          event.timestamp)
             event = macropad.keys.events.get()
 
         for m in link.poll(now):
