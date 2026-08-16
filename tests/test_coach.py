@@ -167,3 +167,61 @@ class TestVarianceScorer:
     def test_snare_never_in_grid_accuracy(self):
         res = self._session([60.0] * 4)
         assert res["accuracy"] == pytest.approx(1.0)     # kick only
+
+
+def _sess(stage, score, dur=40000):
+    return {"stage": stage, "score": score, "duration_ms": dur}
+
+
+class TestHistory:
+    def test_empty_history(self):
+        s = kc.summarize([])
+        assert s == {"unlocked": 1, "graduated": False, "stages": {},
+                     "practice_ms": 0}
+
+    def test_two_sessions_insufficient(self):
+        s = kc.summarize([_sess(1, 0.9), _sess(1, 0.9)])
+        assert s["unlocked"] == 1
+
+    def test_mean_of_last_three(self):
+        s = kc.summarize([_sess(1, 0.5), _sess(1, 0.9), _sess(1, 0.9), _sess(1, 0.9)])
+        assert s["unlocked"] == 2                      # last 3 mean 0.9
+        s = kc.summarize([_sess(1, 0.9), _sess(1, 0.9), _sess(1, 0.5)])
+        assert s["unlocked"] == 1                      # mean ~0.766
+
+    def test_unlocks_chain_but_do_not_skip(self):
+        hist = [_sess(2, 0.9)] * 3                     # stage 2 passed...
+        assert kc.summarize(hist)["unlocked"] == 1     # ...but stage 1 never was
+
+    def test_graduated(self):
+        hist = [_sess(s, 0.9) for s in (1, 2, 3, 4, 5) for _ in range(3)]
+        s = kc.summarize(hist)
+        assert s["unlocked"] == 5 and s["graduated"] is True
+
+    def test_stage_summaries_and_practice(self):
+        s = kc.summarize([_sess(1, 0.7, 1000), _sess(1, 0.95, 2000),
+                          _sess(1, 0.8, 3000), _sess(1, 0.85, 4000)])
+        st = s["stages"]["1"]
+        assert st["best"] == 0.95
+        assert st["recent"] == [0.95, 0.8, 0.85]
+        assert s["practice_ms"] == 10000
+
+    def test_merge_unlock_extends_host(self):
+        host = {"unlocked": 2, "graduated": False,
+                "stages": {"2": {"best": 0.9, "recent": [0.9, 0.9]}}}
+        u, g = kc.merge_unlock(host, [_sess(2, 0.9)])
+        assert (u, g) == (3, False)
+
+    def test_merge_unlock_standalone(self):
+        u, g = kc.merge_unlock({}, [_sess(1, 0.9)] * 3)
+        assert u == 2
+
+    def test_merge_graduation_local(self):
+        host = {"unlocked": 5, "stages": {}}
+        u, g = kc.merge_unlock(host, [_sess(5, 0.9)] * 3)
+        assert g is True
+
+
+def test_format_results():
+    assert kc.format_results({"greens": 14, "ambers": 2, "reds": 1,
+                              "misses": 1, "strays": 0}) == "g14 a2 r1 m1 s0"

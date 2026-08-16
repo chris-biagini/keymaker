@@ -155,3 +155,59 @@ class SessionScorer:
         out["mean_offset"] = mean
         out["score"] = min(acc, var_score)
         return out
+
+
+def _passed(scores):
+    if len(scores) < UNLOCK_SESSIONS:
+        return False
+    tail = scores[-UNLOCK_SESSIONS:]
+    return sum(tail) / len(tail) >= UNLOCK_MEAN
+
+
+def summarize(history):
+    """Derive all progression state from raw history (never stored)."""
+    by = {}
+    practice = 0
+    for h in history:
+        by.setdefault(int(h.get("stage", 0)), []).append(float(h.get("score") or 0.0))
+        practice += int(h.get("duration_ms") or 0)
+    unlocked = 1
+    for s in range(1, 5):
+        if _passed(by.get(s, [])):
+            unlocked = s + 1
+        else:
+            break
+    stages = {}
+    for s in by:
+        if s == 0:
+            continue
+        scores = by[s]
+        stages[str(s)] = {"best": max(scores), "recent": scores[-UNLOCK_SESSIONS:]}
+    return {"unlocked": unlocked, "graduated": _passed(by.get(5, [])),
+            "stages": stages, "practice_ms": practice}
+
+
+def merge_unlock(host_state, local_sessions):
+    """Host snapshot + this-power-cycle sessions -> (unlocked, graduated)."""
+    by = {}
+    for key in (host_state.get("stages") or {}):
+        info = host_state["stages"][key]
+        by[int(key)] = list(info.get("recent") or [])
+    for sess in local_sessions:
+        by.setdefault(int(sess.get("stage", 0)), []).append(float(sess.get("score") or 0.0))
+    unlocked = int(host_state.get("unlocked") or 1)
+    if unlocked < 1:
+        unlocked = 1
+    for s in range(unlocked, 5):
+        if _passed(by.get(s, [])):
+            unlocked = s + 1
+        else:
+            break
+    graduated = bool(host_state.get("graduated")) or _passed(by.get(5, []))
+    return unlocked, graduated
+
+
+def format_results(counts):
+    return ("g" + str(counts["greens"]) + " a" + str(counts["ambers"])
+            + " r" + str(counts["reds"]) + " m" + str(counts["misses"])
+            + " s" + str(counts["strays"]))
