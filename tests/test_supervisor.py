@@ -69,7 +69,8 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     async def scenario():
         hypr = FakeHypr()
         await hypr.start(tmp_path / "hypr" / "fake0")
-        cfg = Config(device=slave_path, runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device=slave_path, runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         task = asyncio.create_task(sup.run())
         await asyncio.sleep(0.4)
@@ -102,7 +103,8 @@ def test_link_up_reports_current_mute_state(monkeypatch, tmp_path):
 
     async def scenario():
         monkeypatch.setattr(vol, "status", fake_status)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -324,3 +326,18 @@ class TestCoachMessages:
             await asyncio.gather(*sup._tasks)
         asyncio.run(go())
         assert sup.coach.load() == []
+
+    def test_coach_rejects_invalid_session_but_still_acks(self, tmp_path):
+        sup = Supervisor(Config(state_dir=tmp_path))
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+
+        async def go():
+            sup._on_pad_msg({"t": "coach", "session": {
+                "stage": None, "score": 0.9, "duration_ms": 40000}})
+            await asyncio.gather(*sup._tasks)
+        asyncio.run(go())
+
+        assert sup.coach.load() == []
+        states = [m for m in sent if m.get("t") == "coach"]
+        assert states and states[-1]["unlocked"] == 1
