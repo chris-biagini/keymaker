@@ -68,7 +68,10 @@ def run(macropad, apps):
                     macropad.pixels.fill(0)
                     apps[active].on_show()
                 else:
-                    apps[active].on_click()
+                    try:
+                        apps[active].on_click()
+                    except Exception as e:
+                        print("on_click error:", repr(e))
         if enc_tracker.tick(now):               # long press → open menu
             menu_idx = active
             try:
@@ -82,13 +85,19 @@ def run(macropad, apps):
             if menu_idx is not None:
                 menu_idx = (menu_idx + delta) % len(apps)
             else:
-                apps[active].on_dial(delta)
+                try:
+                    apps[active].on_dial(delta)
+                except Exception as e:
+                    print("on_dial error:", repr(e))
 
         event = macropad.keys.events.get()
         while event is not None:
             if menu_idx is None:
-                apps[active].on_key_event(event.key_number, event.pressed,
-                                          event.timestamp)
+                try:
+                    apps[active].on_key_event(event.key_number, event.pressed,
+                                              event.timestamp)
+                except Exception as e:
+                    print("on_key_event error:", repr(e))
             event = macropad.keys.events.get()
 
         for m in link.poll(now):
@@ -103,4 +112,7 @@ def run(macropad, apps):
             screen.line2.text = ""
             screen.footer.text = "click to switch"
         else:
-            apps[active].tick(now)
+            try:
+                apps[active].tick(now)
+            except Exception as e:
+                print("tick error:", repr(e))

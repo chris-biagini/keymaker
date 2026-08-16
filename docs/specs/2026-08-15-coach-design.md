@@ -107,7 +107,10 @@ applies to stages 1–5.
   MIDI, unscored). Dial = BPM, 60–140, 5/detent, default 95. Knob-click =
   nothing in idle.
 - **countin**: one bar of clicks (accent on 1). Drum hits sound but are
-  neither scored nor strays.
+  neither scored nor strays — except during the final 120 ms of the
+  count-in, which already belongs to bar 1's matching window and is scored
+  normally (otherwise a legitimately early first hit would be eaten and
+  then punished as a miss).
 - **playing**: 8 two-bar loops (16 bars). Epoch = `ticks_ms` at countin
   start; every event time derives from the epoch (`epoch + slot·sixteenth_ms`)
   via `ticks_diff` (wrap-safe) — no chained intervals, no drift. Click on
@@ -175,9 +178,10 @@ OLED (inverted header per v2 convention, lowercase ASCII):
   `bpm 95  best 92%`; footer `tap a stage  knob bpm`
 - playing — header `<n> <name>`; line1 `bpm 95  bar 7/16` (stage 4:
   `swing 62%  bar 7/16`); line2 `acc 91%` live; footer `click = stop`
-- results — header `results`; line1 `<name>  score 88%`; line2
-  `g14 a2 r1 m1 s0`; footer `unlocked: <next name>` / `need 85% x3` /
-  stage-5 gate fail: `drag it`
+- results — header `results  88%` (score in the header, which
+  space-pads/truncates safely); line1 `<name>`; line2 `g14 a2 r1 m1 s0`;
+  footer `unlocked: <next name>` / `need 85% x3` / stage-5 gate fail:
+  `drag it` (line1 `<name>  score 88%` overflowed 21 chars for stage 5)
 - graduation — header `graduated`; line1 `you have consistency`; line2
   `you need velocity`; footer `the akai awaits`
 

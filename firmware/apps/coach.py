@@ -119,6 +119,7 @@ class Coach(App):
             self._flash[s] = (km_coach.COL_RED, ticks_add(now, FLASH_MS))
             return
         self.stage = s
+        self._flash = {}
         self.epoch = now
         q = 60000.0 / self.bpm
         self.quarter = q
@@ -150,12 +151,15 @@ class Coach(App):
     def _hit(self, instr, key, now):
         self.audio.play(instr)
         self._midi(instr)
-        if self.mode == "playing" and self.scorer is not None:
+        scored = False
+        if self.scorer is not None and self.mode in ("countin", "playing"):
             t = float(ticks_diff(now, self.epoch))
-            v = self.scorer.on_hit(instr, t)
-            self._flash[key] = (VERDICT[v], ticks_add(now, FLASH_MS))
-            self._update_acc()
-        else:
+            if self.mode == "playing" or t >= self.play_start - km_coach.MISS_MS:
+                v = self.scorer.on_hit(instr, t)
+                self._flash[key] = (VERDICT[v], ticks_add(now, FLASH_MS))
+                self._update_acc()
+                scored = True
+        if not scored:
             self._flash[key] = (NEUTRAL, ticks_add(now, FLASH_MS))
 
     def _midi(self, instr):
@@ -236,9 +240,11 @@ class Coach(App):
             self.mode = "idle"
             self._draw_idle()
         if self.queue and self.link.up:
+            remaining = []
             for sess in self.queue:
-                self.link.send({"t": "coach", "session": sess})
-            self.queue = []
+                if not self.link.send({"t": "coach", "session": sess}):
+                    remaining.append(sess)
+            self.queue = remaining
         self._leds(now)
 
     # ---- output ----------------------------------------------------
@@ -251,24 +257,30 @@ class Coach(App):
         if self.mode in ("idle", "results", "grad"):
             unlocked, _ = self._unlocked()
             for s in range(6):
-                c = km_palette.hex_to_int(km_palette.INDEX_BINS[s])
-                self._set_px(s, c if s <= unlocked
-                             else km_palette.scale(c, LOCKED_SCALE))
+                if s not in self._flash:
+                    c = km_palette.hex_to_int(km_palette.INDEX_BINS[s])
+                    self._set_px(s, c if s <= unlocked
+                                 else km_palette.scale(c, LOCKED_SCALE))
             for n in (6, 7, 8):
-                self._set_px(n, 0)
+                if n not in self._flash:
+                    self._set_px(n, 0)
             for n in (9, 10, 11):
-                self._set_px(n, DIM)
+                if n not in self._flash:
+                    self._set_px(n, DIM)
         else:
             beat = (self._beat_until is not None
                     and ticks_diff(self._beat_until, now) > 0)
             row0 = (km_coach.COL_ACCENT if self._beat_accent else PULSE) \
                 if beat else 0
             for n in (0, 1, 2):
-                self._set_px(n, row0)
+                if n not in self._flash:
+                    self._set_px(n, row0)
             for n in (3, 4, 5, 6, 7, 8):
-                self._set_px(n, 0)
+                if n not in self._flash:
+                    self._set_px(n, 0)
             for n in (9, 10, 11):
-                self._set_px(n, DIM)
+                if n not in self._flash:
+                    self._set_px(n, DIM)
         for key in list(self._flash):
             color, until = self._flash[key]
             if ticks_diff(until, now) > 0:
@@ -278,10 +290,11 @@ class Coach(App):
                 self._px[key] = None            # force repaint next frame
 
     def _best(self):
-        info = (self.hstate.get("stages") or {}).get(str(self.stage))
-        if not info:
+        try:
+            info = (self.hstate.get("stages") or {}).get(str(self.stage))
+            return "  best " + str(int(float(info["best"]) * 100.0 + 0.5)) + "%"
+        except Exception:
             return ""
-        return "  best " + str(int(info["best"] * 100.0 + 0.5)) + "%"
 
     def _draw_idle(self):
         st = km_coach.STAGES[self.stage]
@@ -316,9 +329,9 @@ class Coach(App):
 
     def _draw_results(self):
         st = km_coach.STAGES[self.stage]
-        self.screen.set_header("results")
-        self.screen.line1.text = st["name"] + "  score " + \
-            str(int(self._res["score"] * 100.0 + 0.5)) + "%"
+        self.screen.set_header("results  " +
+                               str(int(self._res["score"] * 100.0 + 0.5)) + "%")
+        self.screen.line1.text = st["name"]
         self.screen.line2.text = km_coach.format_results(self._res)
         self.screen.footer.text = self._note
 
