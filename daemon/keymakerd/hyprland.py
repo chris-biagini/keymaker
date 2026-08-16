@@ -70,6 +70,8 @@ class HyprState:
         self.names = {}
         self.cls = ""
         self.title = ""
+        self.addr = ""
+        self.fg = {}          # ws id -> {"addr", "cls"} best footguard-* client
         self.submap = ""
         self.screencast = False
         self._urgent_addrs = set()
@@ -103,6 +105,23 @@ class HyprState:
             if addr_ws.get(a) is not None and addr_ws[a] != active
         }
         urgent = sorted({addr_ws[a] for a in self._urgent_addrs})
+        # Per-workspace footguard-* client, for the workspace-aware bottom deck.
+        # focusHistoryID 0 is the focused window, ascending = less recent, so the
+        # lowest id per workspace is "the terminal you were most recently in there".
+        # Daemon-internal (drives ctx polling and tap focus), never sent to the pad,
+        # so it is deliberately NOT part of the changed-state comparison below.
+        fg = {}
+        for c in clients:
+            if not str(c.get("class", "")).startswith("footguard-"):
+                continue
+            ws_id = c.get("workspace", {}).get("id")
+            if ws_id is None:
+                continue
+            hist = c.get("focusHistoryID", 1 << 30)
+            if ws_id not in fg or hist < fg[ws_id][0]:
+                fg[ws_id] = (hist, {"addr": str(c.get("address", "")),
+                                    "cls": str(c.get("class", ""))})
+        self.fg = {ws: entry for ws, (_, entry) in fg.items()}
         colors = {}
         for w in workspaces:
             c = ws_color(w.get("name"))
@@ -120,6 +139,7 @@ class HyprState:
             msgs.append(self._ws_msg())
         cls = (active_win or {}).get("class", "")
         title = (active_win or {}).get("title", "")[:60]
+        self.addr = str((active_win or {}).get("address", ""))
         if (cls, title) != (self.cls, self.title):
             self.cls, self.title = cls, title
             msgs.append(self._win_msg())

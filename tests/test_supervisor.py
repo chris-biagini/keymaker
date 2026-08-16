@@ -137,6 +137,17 @@ def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
     assert any(m["t"] == "flags" for m in sent)
 
 
+def _quiet_ledger(monkeypatch):
+    """Keep _poll_ledger off the real tmux server during ctx tests."""
+    from keymakerd import tmux as tmuxmod
+
+    async def none(*a, **k):
+        return None
+
+    monkeypatch.setattr(tmuxmod, "list_bells", none)
+    monkeypatch.setattr(tmuxmod, "list_claude_panes", none)
+
+
 def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
     import keymakerd.__main__ as main_mod
     from keymakerd import tmux as tmuxmod
@@ -147,14 +158,16 @@ def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
     async def scenario():
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", fake_list)
+        _quiet_ledger(monkeypatch)
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.cls = "footguard-mirepoix"
+        # footguard window on the active workspace -- focus is irrelevant now
+        sup.state.fg = {1: {"addr": "0xb", "cls": "footguard-mirepoix"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
-        sup.state.cls = "firefox"
+        sup.state.active = 2                        # workspace with no footguard
         await asyncio.sleep(0.15)
         task.cancel()
         return sent
@@ -165,6 +178,7 @@ def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
     assert len(tmux_msgs) == 1                      # state-shaped: no re-send
     assert tmux_msgs[0]["session"] == "mirepoix"
     assert tmux_msgs[0]["items"][0]["name"] == "vim"
+    assert tmux_msgs[0]["addr"] == "0xb"            # tap needs the window address
     assert ctx[-1]["mode"] == "none"
 
 
@@ -182,11 +196,12 @@ def test_context_watcher_filters_slots_and_degrades(monkeypatch, tmp_path):
     async def scenario(lister):
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", lister)
+        _quiet_ledger(monkeypatch)
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.cls = "footguard-x"
+        sup.state.fg = {1: {"addr": "0xa", "cls": "footguard-x"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
         task.cancel()
@@ -208,11 +223,12 @@ def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
     async def scenario():
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", boom)
+        _quiet_ledger(monkeypatch)
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.cls = "footguard-x"
+        sup.state.fg = {1: {"addr": "0xa", "cls": "footguard-x"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
         alive = not task.done()
@@ -249,11 +265,12 @@ def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_
     async def scenario():
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", lister)
+        _quiet_ledger(monkeypatch)
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.cls = "footguard-macropad"
+        sup.state.fg = {3: {"addr": "0xm", "cls": "footguard-macropad"}}
         sup.state.active = 3
         sup.state.names = {"3": "keymaker"}
         task = asyncio.create_task(sup._context())
@@ -280,18 +297,105 @@ def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
-        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": []}
+        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": [], "addr": None}
         sup._on_pad_msg({"t": "key", "n": 6, "act": "tap"})    # slot 1
         sup._on_pad_msg({"t": "key", "n": 11, "act": "tap"})   # slot 6
         sup._on_pad_msg({"t": "key", "n": 7, "act": "hold"})   # reserved: no-op
-        sup.ctx = {"t": "ctx", "mode": "none", "session": None, "items": []}
+        sup.ctx = {"t": "ctx", "mode": "none", "session": None, "items": [], "addr": None}
         sup._on_pad_msg({"t": "key", "n": 8, "act": "tap"})    # mode none: ignored
-        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": []}
+        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": [], "addr": None}
         sup._on_pad_msg({"t": "key", "n": 13, "act": "tap"})   # out of range: ignored
         await asyncio.sleep(0.05)
         return selected
 
     assert asyncio.run(scenario()) == [("mirepoix", 1), ("mirepoix", 6)]
+
+
+def test_tap_focuses_foot_window_first_when_unfocused(monkeypatch, tmp_path):
+    from keymakerd import tmux as tmuxmod
+    calls = []
+
+    async def fake_select(session, i):
+        calls.append(("select", session, i))
+        return True
+
+    async def fake_dispatch(cmd):
+        calls.append(("hypr", cmd))
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "select_window", fake_select)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
+        sup._dispatch = fake_dispatch
+        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "oracle",
+                   "items": [], "addr": "0xfeet"}
+        sup.state.addr = "0xffox"                 # firefox holds focus
+        sup._on_pad_msg({"t": "key", "n": 6, "act": "tap"})
+        await asyncio.sleep(0.05)
+        first = list(calls)
+        calls.clear()
+        sup.state.addr = "0xfeet"                 # foot already focused
+        sup._on_pad_msg({"t": "key", "n": 7, "act": "tap"})
+        await asyncio.sleep(0.05)
+        return first, list(calls)
+
+    unfocused, focused = asyncio.run(scenario())
+    # unfocused: focus the foot window FIRST, then select the tmux window
+    assert unfocused == [("hypr", "dispatch focuswindow address:0xfeet"),
+                         ("select", "oracle", 1)]
+    assert focused == [("select", "oracle", 2)]   # no focus hop when already there
+
+
+def test_ledger_emission_is_state_shaped_sorted_and_capped(monkeypatch, tmp_path):
+    from keymakerd import tmux as tmuxmod
+    from keymakerd.__main__ import LEDGER_MAX_CLAUDES
+
+    claudes = [{"s": "a", "i": 1, "busy": True, "title": "t1"},
+               {"s": "b", "i": 1, "busy": False, "title": "t2"},
+               {"s": "c", "i": 1, "busy": True, "title": "t3"},
+               {"s": "d", "i": 1, "busy": False, "title": "t4"},
+               {"s": "e", "i": 1, "busy": True, "title": "t5"}]
+    bells = [{"s": "b", "i": 3, "name": "w"}]
+
+    async def fake_bells(*a, **k):
+        return bells
+
+    async def fake_panes(*a, **k):
+        return claudes
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_bells", fake_bells)
+        monkeypatch.setattr(tmuxmod, "list_claude_panes", fake_panes)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        await sup._poll_ledger()
+        await sup._poll_ledger()                  # unchanged: no re-send
+        return sent
+
+    sent = asyncio.run(scenario())
+    ledgers = [m for m in sent if m["t"] == "ledger"]
+    assert len(ledgers) == 1                      # state-shaped
+    got = ledgers[0]["claudes"]
+    assert len(got) == LEDGER_MAX_CLAUDES         # capped for the 1024B line limit
+    assert [c["busy"] for c in got] == [False, False, True, True]   # waiting first
+    assert ledgers[0]["bells"] == bells
+
+
+def test_link_up_snapshot_includes_ledger(monkeypatch, tmp_path):
+    async def scenario():
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        await sup._on_link_up()
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert {"t": "ledger", "claudes": [], "bells": []} in sent
 
 
 class TestCoachMessages:
