@@ -39,6 +39,8 @@ class Coach(App):
         self.hstate = {}            # last coach state msg from host
         self.local = []             # sessions completed this power-cycle
         self.queue = []             # sessions not yet sent
+        self._awaiting_ack = []     # sessions sent, not yet reflected in hstate
+        self._unlock_cache = (1, False)
         self.mode = "idle"          # idle|countin|playing|results|grad
         self.scorer = None
         self.audio = None
@@ -77,6 +79,8 @@ class Coach(App):
     def on_msg(self, msg):
         if msg.get("t") == "coach":
             self.hstate = msg
+            self.local = km_coach.prune_acked(self.local, self._awaiting_ack)
+            self._awaiting_ack = []
             if self.mode == "idle":
                 self._draw_idle()
 
@@ -111,7 +115,11 @@ class Coach(App):
 
     # ---- session ---------------------------------------------------
     def _unlocked(self):
-        return km_coach.merge_unlock(self.hstate, self.local)
+        try:
+            self._unlock_cache = km_coach.merge_unlock(self.hstate, self.local)
+        except Exception as e:
+            print("unlock calc failed:", repr(e))
+        return self._unlock_cache
 
     def _select(self, s, now):
         unlocked, _ = self._unlocked()
@@ -133,10 +141,11 @@ class Coach(App):
         self.mode = "countin"
         self.play_start = 4.0 * q
         self.loop_ms = 8.0 * q                  # two bars
-        self.next_loop = 0
         self.clicks = [(i * q, i == 0) for i in range(4)]
         self.scorer = km_coach.SessionScorer(
             variance=km_coach.STAGES[s]["variance"])
+        self._emit_loop(0)
+        self.next_loop = 1
         self._bar_shown = 0
         self._draw_play()
 
@@ -193,7 +202,7 @@ class Coach(App):
             self._draw_grad()
             return
         if u_after > u_before:
-            self._note = "unlocked: " + km_coach.STAGES[u_after]["name"]
+            self._note = "next: " + km_coach.STAGES[u_after]["name"]
         elif st["variance"] and res.get("mean_offset", 0.0) < km_coach.LATE_GATE_MS:
             self._note = "drag it"
         else:
@@ -230,9 +239,9 @@ class Coach(App):
                 self._flash[KEY_OF[instr]] = (VERDICT["miss"],
                                               ticks_add(now, FLASH_MS))
                 self._update_acc()
-            bar = 1 + int(max(0.0, t - self.play_start) / (self.loop_ms / 2.0))
+            bar = min(16, 1 + int(max(0.0, t - self.play_start) / (self.loop_ms / 2.0)))
             if self.mode == "playing" and bar != self._bar_shown:
-                self._bar_shown = min(bar, 16)
+                self._bar_shown = bar
                 self._draw_play()
             if t >= self.play_start + km_coach.LOOPS * self.loop_ms + km_coach.MISS_MS:
                 self._finish(now)
@@ -242,7 +251,9 @@ class Coach(App):
         if self.queue and self.link.up:
             remaining = []
             for sess in self.queue:
-                if not self.link.send({"t": "coach", "session": sess}):
+                if self.link.send({"t": "coach", "session": sess}):
+                    self._awaiting_ack.append(sess)
+                else:
                     remaining.append(sess)
             self.queue = remaining
         self._leds(now)

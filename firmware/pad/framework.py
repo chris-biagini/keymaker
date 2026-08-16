@@ -52,7 +52,10 @@ def run(macropad, apps):
     enc_tracker = KeyTracker(hold_ms=HOLD_MENU_MS, diff=ticks_diff)
     last_pos = macropad.encoder
     link.send({"t": "hello", "fw": "0.1.0", "app": apps[active].name})
-    apps[active].on_show()
+    try:
+        apps[active].on_show()
+    except Exception as e:
+        print("on_show error:", repr(e))
 
     while True:
         now = ticks_ms()
@@ -66,7 +69,10 @@ def run(macropad, apps):
                     active, menu_idx = menu_idx, None
                     link.send({"t": "hello", "fw": "0.1.0", "app": apps[active].name})
                     macropad.pixels.fill(0)
-                    apps[active].on_show()
+                    try:
+                        apps[active].on_show()
+                    except Exception as e:
+                        print("on_show error:", repr(e))
                 else:
                     try:
                         apps[active].on_click()

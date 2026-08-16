@@ -19,6 +19,8 @@ def _sanitize(session):
         return None
     if not 0 <= out["stage"] <= 5:
         return None
+    if not (0.0 <= out["score"] <= 1.0):
+        return None
     return out
 
 

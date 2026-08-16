@@ -206,6 +206,17 @@ def merge_unlock(host_state, local_sessions):
     return unlocked, graduated
 
 
+def prune_acked(local_sessions, acked_sessions):
+    """Drop sessions a host ack already reflects (list equality, each once)."""
+    out = list(local_sessions)
+    for sess in acked_sessions:
+        try:
+            out.remove(sess)
+        except ValueError:
+            pass
+    return out
+
+
 def format_results(counts):
     return ("g" + str(counts["greens"]) + " a" + str(counts["ambers"])
             + " r" + str(counts["reds"]) + " m" + str(counts["misses"])

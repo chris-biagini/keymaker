@@ -242,3 +242,30 @@ class TestHistory:
 def test_format_results():
     assert kc.format_results({"greens": 14, "ambers": 2, "reds": 1,
                               "misses": 1, "strays": 0}) == "g14 a2 r1 m1 s0"
+
+
+class TestAckCycle:
+    def test_flush_ack_cycle_does_not_double_count(self):
+        # session A: finish -> local=[A]; flush -> awaiting=[A]
+        a = _sess(1, 0.9)
+        local, awaiting = [a], [a]
+        host = kc.summarize([a])                     # daemon ack after append
+        local = kc.prune_acked(local, awaiting)      # pad prunes on ack
+        assert local == []
+        # session B: finish while linked
+        b = _sess(1, 0.9)
+        local.append(b)
+        u, _ = kc.merge_unlock(host, local)
+        assert u == 1                                 # 2 real sessions: no unlock yet
+        host = kc.summarize([a, b])
+        local = kc.prune_acked(local, [b])
+        c = _sess(1, 0.9)
+        local.append(c)
+        u, _ = kc.merge_unlock(host, local)
+        assert u == 2                                 # 3rd real session unlocks
+
+    def test_prune_acked_removes_each_once(self):
+        a, b = _sess(1, 0.9), _sess(1, 0.9)          # equal dicts, distinct objects
+        assert kc.prune_acked([a, b], [a]) == [b]
+        assert kc.prune_acked([a], [b, b]) == []
+        assert kc.prune_acked([], [a]) == []

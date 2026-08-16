@@ -58,6 +58,16 @@ def test_append_rejects_invalid_session(tmp_path):
     assert store.load() == []
 
 
+def test_append_rejects_non_finite_score(tmp_path):
+    p = tmp_path / "coach.json"
+    store = CoachStore(p)
+    store.append(_sess(score=float("inf")))
+    assert not p.exists()
+    store.append(_sess(score=float("nan")))
+    assert not p.exists()
+    assert store.load() == []
+
+
 def test_load_returns_empty_for_non_dict_json(tmp_path):
     p = tmp_path / "coach.json"
     p.write_text("null")

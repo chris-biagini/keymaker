@@ -80,10 +80,11 @@ off-beat hat moves from `Q/2` (straight) to `(s/100)·Q`, `s ∈ [50, 67]`
 - **Session accuracy** = greens / (expected_total + strays). Empty
   denominator → 0.
 - **Stage 5**: kick grid-scored as usual. Snare offsets are measured against
-  nominal slots; `variance_score = max(0, 1 − pstdev(offsets)/40)` (ms), and
-  the session counts **only if mean offset ≥ +10 ms** (you must actually be
-  late, else score = 0 with OLED hint "drag it"). Session score =
-  `min(kick_accuracy, variance_score)`.
+  nominal slots; `variance_score = max(0, 1 − pstdev(offsets)/40)` (ms),
+  **scaled by coverage** (`× matched/expected` snares — steadiness on 2 of 8
+  snares is not steadiness), and the session counts **only if mean offset ≥
+  +10 ms** (you must actually be late, else score = 0 with OLED hint
+  "drag it"). Session score = `min(kick_accuracy, variance_score)`.
 - **Unlock rule**: stage n+1 unlocks once stage n's history contains **any 3
   consecutive sessions** with mean score ≥ 0.85. Any BPM counts. Stages 0
   and 1 are always available. Because a passing window can never be removed
@@ -180,8 +181,9 @@ OLED (inverted header per v2 convention, lowercase ASCII):
   `swing 62%  bar 7/16`); line2 `acc 91%` live; footer `click = stop`
 - results — header `results  88%` (score in the header, which
   space-pads/truncates safely); line1 `<name>`; line2 `g14 a2 r1 m1 s0`;
-  footer `unlocked: <next name>` / `need 85% x3` / stage-5 gate fail:
-  `drag it` (line1 `<name>  score 88%` overflowed 21 chars for stage 5)
+  footer `next: <name>` / `need 85% x3` / stage-5 gate fail:
+  `drag it` (line1 `<name>  score 88%` overflowed 21 chars for stage 5;
+  so did footer `unlocked: off the grid` — `next:` fits every stage name)
 - graduation — header `graduated`; line1 `you have consistency`; line2
   `you need velocity`; footer `the akai awaits`
 
