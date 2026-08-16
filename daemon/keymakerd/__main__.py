@@ -23,7 +23,10 @@ def _session_name(label):
     s = label
     for ch in ".:/":
         s = s.replace(ch, "-")
-    return "-".join(s.split()).strip("-")
+    s = "-".join(s.split())
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s.strip("-")
 
 
 @dataclass

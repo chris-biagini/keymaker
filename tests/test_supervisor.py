@@ -228,6 +228,10 @@ def test_session_name_sanitizes_like_footguard():
     assert _session_name("wacky sax") == "wacky-sax"
     assert _session_name("a.b:c/d") == "a-b-c-d"
     assert _session_name(" x ") == "x"
+    assert _session_name("note: draft") == "note-draft"
+    assert _session_name("ch. 2 notes") == "ch-2-notes"
+    assert _session_name("a..b") == "a-b"
+    assert _session_name("foo. bar") == "foo-bar"
 
 
 def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_path):
