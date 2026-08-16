@@ -221,6 +221,23 @@ class TestHistory:
         u, g = kc.merge_unlock(host, [_sess(5, 0.9)] * 3)
         assert g is True
 
+    def test_unlock_is_monotone_over_history(self):
+        hist = [_sess(1, 0.9)] * 3 + [_sess(1, 0.1)] * 5
+        assert kc.summarize(hist)["unlocked"] == 2
+
+    def test_graduation_is_sticky(self):
+        hist = [_sess(s, 0.9) for s in (1, 2, 3, 4, 5) for _ in range(3)]
+        hist += [_sess(5, 0.0)] * 4
+        assert kc.summarize(hist)["graduated"] is True
+
+    def test_passing_window_mid_history(self):
+        hist = [_sess(1, 0.1), _sess(1, 0.9), _sess(1, 0.9), _sess(1, 0.9),
+                _sess(1, 0.1)]
+        assert kc.summarize(hist)["unlocked"] == 2
+
+    def test_merge_unlock_clamps_corrupt_host(self):
+        assert kc.merge_unlock({"unlocked": 99}, [])[0] == 5
+
 
 def test_format_results():
     assert kc.format_results({"greens": 14, "ambers": 2, "reds": 1,

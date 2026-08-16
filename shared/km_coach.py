@@ -158,10 +158,11 @@ class SessionScorer:
 
 
 def _passed(scores):
-    if len(scores) < UNLOCK_SESSIONS:
-        return False
-    tail = scores[-UNLOCK_SESSIONS:]
-    return sum(tail) / len(tail) >= UNLOCK_MEAN
+    for i in range(len(scores) - UNLOCK_SESSIONS + 1):
+        w = scores[i:i + UNLOCK_SESSIONS]
+        if sum(w) / UNLOCK_SESSIONS >= UNLOCK_MEAN:
+            return True
+    return False
 
 
 def summarize(history):
@@ -195,9 +196,7 @@ def merge_unlock(host_state, local_sessions):
         by[int(key)] = list(info.get("recent") or [])
     for sess in local_sessions:
         by.setdefault(int(sess.get("stage", 0)), []).append(float(sess.get("score") or 0.0))
-    unlocked = int(host_state.get("unlocked") or 1)
-    if unlocked < 1:
-        unlocked = 1
+    unlocked = min(5, max(1, int(host_state.get("unlocked") or 1)))
     for s in range(unlocked, 5):
         if _passed(by.get(s, [])):
             unlocked = s + 1
