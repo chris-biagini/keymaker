@@ -95,6 +95,8 @@ class Supervisor:
             n = int(msg.get("n", 0))
             if n < 6:                                     # top half: workspaces 1-6
                 verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
+                if verb != "workspace":                   # holds are rare and destructive; log for forensics
+                    print(f"keymakerd: hold key {n} -> {verb} {n + 1}", flush=True)
                 self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
             elif 6 <= n <= 11 and msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
                 self._spawn(self._select_window(self.ctx["session"], n - 5), "tmux-select")
