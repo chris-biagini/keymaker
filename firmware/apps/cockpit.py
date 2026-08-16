@@ -1,9 +1,10 @@
-"""Cockpit: keys 0-5 = workspaces 1-6, keys 6-11 = tmux windows of the focused footguard session; knob = volume; OLED = identity + legend."""
+"""Cockpit: keys 0-5 = workspaces 1-6, keys 6-11 = tmux windows of the active
+workspace's footguard session; knob = volume; OLED = identity + attention ledger."""
 from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_palette
 from km_keys import KeyTracker
-from km_text import ctx_legend, marquee
+from km_text import marquee
 
 from pad.framework import App
 from pad.ui import WIDTH_CHARS
@@ -17,6 +18,7 @@ class Cockpit(App):
                    "names": {}}
         self.ctx = {"t": "ctx", "mode": "none", "session": None, "items": []}
         self._ctx_by_i = {}
+        self.ledger = {"t": "ledger", "claudes": [], "bells": []}
         self.win = {"cls": "", "title": ""}
         self.flags = {"submap": "", "screencast": False, "muted": False}
         self.palette = dict(km_palette.DEFAULT)
@@ -41,6 +43,8 @@ class Cockpit(App):
             self._ctx_by_i = {}
             for it in msg.get("items", []):
                 self._ctx_by_i[it["i"]] = it
+        elif t == "ledger":
+            self.ledger = msg
         self._draw_all(ticks_ms())
 
     def on_key_event(self, n, pressed, now):
@@ -100,14 +104,24 @@ class Cockpit(App):
         name = self.ws.get("names", {}).get(str(active))
         ident = (str(active) + " - " + name) if name else ("ws " + str(active))
         self.screen.set_header(ident + badges)
-        if self.ctx.get("mode") == "tmux":
-            lines = ctx_legend(list(self._ctx_by_i.values()))
-            self.screen.line1.text = lines[0]
-            self.screen.line2.text = lines[1]
+        # Attention ledger: what is waiting on you, machine-wide. Blank lines
+        # mean all clear -- a glanceable state in itself, and it reads across a
+        # locked screen because the pad is a display hyprlock cannot cover.
+        claudes = self.ledger.get("claudes", [])
+        bells = self.ledger.get("bells", [])
+        waiting = [c for c in claudes if not c.get("busy")]
+        busy = len(claudes) - len(waiting)
+        if waiting:
+            text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
+            self.screen.line1.text = marquee("* " + text, WIDTH_CHARS, now)
         else:
-            self.screen.line1.text = marquee(self.win["title"], WIDTH_CHARS, now)
+            self.screen.line1.text = ""
+        if bells:
+            text = " ".join(b.get("s", "?") + ":" + str(b.get("i", "?")) for b in bells)
+            self.screen.line2.text = marquee("! " + text, WIDTH_CHARS, now)
+        else:
             self.screen.line2.text = ""
-        self.screen.footer.text = self.win["cls"][:WIDTH_CHARS]
+        self.screen.footer.text = (str(busy) + " working") if busy else ""
 
     def _draw_all(self, now):
         self._draw_leds(now)

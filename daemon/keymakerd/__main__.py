@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+
+import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +18,39 @@ CTX_POLL_S = 1.0
 
 
 def _ctx_none():
-    return {"t": "ctx", "mode": "none", "session": None, "items": []}
+    return {"t": "ctx", "mode": "none", "session": None, "items": [], "addr": None}
+
+
+def _ledger_none():
+    return {"t": "ledger", "claudes": [], "bells": []}
+
+
+# LineCodec discards lines over 1024 bytes WHOLE -- an uncapped ledger would
+# render fine on a quiet bench and then silently show a STALE ledger on the
+# busiest day (state-shaped protocol: nothing retransmits until the next
+# change), which is exactly when it matters. Field caps live in tmux.py
+# (_TITLE_MAX/_SESSION_MAX); count caps here; and because JSON escaping can
+# still inflate quote-heavy titles (review 2026-08-16 measured 1313 B worst
+# case pre-fix), the encoded size is CHECKED, shedding busy-last entries until
+# it fits. Waiting Claudes sort first so the shedding order is least-interesting.
+LEDGER_MAX_CLAUDES = 4
+LEDGER_MAX_BELLS = 6
+LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 1024
+
+
+def _ledger_msg(claudes, bells):
+    claudes = sorted(claudes, key=lambda c: c["busy"])[:LEDGER_MAX_CLAUDES]
+    bells = bells[:LEDGER_MAX_BELLS]
+    while True:
+        msg = {"t": "ledger", "claudes": claudes, "bells": bells}
+        if len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES:
+            return msg
+        if claudes:
+            claudes = claudes[:-1]
+        elif bells:
+            bells = bells[:-1]
+        else:
+            return msg
 
 
 def _session_name(label):
@@ -46,6 +80,7 @@ class Supervisor:
         self.muted = False
         self.palette = None
         self.ctx = _ctx_none()
+        self.ledger = _ledger_none()
         self.coach = CoachStore(cfg.state_dir / "coach.json")
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
@@ -75,6 +110,7 @@ class Supervisor:
         for m in self.state.snapshot():
             self.link.send(m)
         self.link.send(self.ctx)
+        self.link.send(self.ledger)
         try:
             _, self.muted = await volume.status()
         except (OSError, ValueError, IndexError):
@@ -99,7 +135,7 @@ class Supervisor:
                     print(f"keymakerd: hold key {n} -> {verb} {n + 1}", flush=True)
                 self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
             elif 6 <= n <= 11 and msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
-                self._spawn(self._select_window(self.ctx["session"], n - 5), "tmux-select")
+                self._spawn(self._activate_window(dict(self.ctx), n - 5), "tmux-activate")
         elif t == "dial":
             self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
         elif t == "click":
@@ -114,9 +150,16 @@ class Supervisor:
             except OSError:
                 self._instance = None
 
-    async def _select_window(self, session, i):
-        if not await tmux.select_window(session, i):
-            print(f"keymakerd: select-window {session}:{i} failed", flush=True)
+    async def _activate_window(self, ctx, i):
+        """Tap on a bottom key: focus the workspace's foot window if it isn't
+        focused (the deck is workspace-aware, not focus-gated), then select the
+        tmux window. ctx is a snapshot taken at tap time so a poll racing this
+        coroutine cannot swap the target under it."""
+        addr = ctx.get("addr")
+        if addr and addr != self.state.addr:
+            await self._dispatch(f"dispatch focuswindow address:{addr}")
+        if not await tmux.select_window(ctx["session"], i):
+            print(f"keymakerd: select-window {ctx['session']}:{i} failed", flush=True)
 
     async def _volume(self, direction, toggle):
         try:
@@ -189,12 +232,16 @@ class Supervisor:
             self.link.send({"t": "ping"})
 
     async def _context(self):
+        # The deck is WORKSPACE-aware, not focus-gated: keys 6-11 track the
+        # footguard window living on the active workspace whether or not it holds
+        # focus, so the bottom half stays lit while you're in the browser next to
+        # it. Workspaces with no footguard window still cost nothing (no poll).
         while True:
             await asyncio.sleep(CTX_POLL_S)
-            cls = self.state.cls
+            client = self.state.fg.get(self.state.active)
             new = _ctx_none()
-            if cls.startswith("footguard-"):
-                candidates = [cls.removeprefix("footguard-")]
+            if client is not None:
+                candidates = [client["cls"].removeprefix("footguard-")]
                 label = self.state.names.get(str(self.state.active))
                 if label:
                     fallback = _session_name(label)
@@ -205,13 +252,30 @@ class Supervisor:
                         items = await tmux.list_windows(session)
                         if items is not None:
                             new = {"t": "ctx", "mode": "tmux", "session": session,
-                                   "items": [w for w in items if 1 <= w["i"] <= 6]}
+                                   "items": [w for w in items if 1 <= w["i"] <= 6],
+                                   "addr": client["addr"]}
                             break
                 except Exception as e:
                     print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
             if new != self.ctx:
                 self.ctx = new
                 self.link.send(new)
+            await self._poll_ledger()
+
+    async def _poll_ledger(self):
+        # Global on purpose -- the ledger is the "what's waiting on me" surface
+        # and must keep reporting while focus (or the whole screen, via hyprlock)
+        # is elsewhere. The pad is a display hyprlock has no jurisdiction over.
+        try:
+            bells = await tmux.list_bells()
+            claudes = await tmux.list_claude_panes()
+        except Exception as e:
+            print(f"keymakerd: ledger poll failed: {e!r}", flush=True)
+            return
+        new = _ledger_msg(claudes or [], bells or [])
+        if new != self.ledger:
+            self.ledger = new
+            self.link.send(new)
 
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)

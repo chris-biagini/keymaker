@@ -101,3 +101,39 @@ def test_refresh_includes_workspace_names():
     msgs = s.refresh(wss, {"id": 2}, None, [])
     ws = next(m for m in msgs if m["t"] == "ws")
     assert ws["names"] == {"2": "mirepoix", "3": "macropad"}
+
+
+FG_CLIENTS = [
+    {"address": "0xaaa", "class": "firefox", "workspace": {"id": 2}, "focusHistoryID": 0},
+    {"address": "0xbbb", "class": "footguard-mirepoix", "workspace": {"id": 2}, "focusHistoryID": 3},
+    {"address": "0xccc", "class": "footguard-scratch", "workspace": {"id": 2}, "focusHistoryID": 1},
+    {"address": "0xddd", "class": "footguard-oracle", "workspace": {"id": 3}, "focusHistoryID": 5},
+    {"address": "0xeee", "class": "foot", "workspace": {"id": 1}, "focusHistoryID": 4},
+]
+
+
+def test_refresh_builds_per_workspace_footguard_map():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, FG_CLIENTS)
+    # ws 2 has two footguard windows: lowest focusHistoryID (most recent) wins
+    assert s.fg == {
+        2: {"addr": "0xccc", "cls": "footguard-scratch"},
+        3: {"addr": "0xddd", "cls": "footguard-oracle"},
+    }                                       # plain foot and firefox excluded
+
+
+def test_refresh_fg_map_tolerates_missing_fields():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, [
+        {"class": "footguard-x"},                                  # no workspace
+        {"class": "footguard-y", "workspace": {"id": 4}},          # no focusHistoryID, no address
+    ])
+    assert s.fg == {4: {"addr": "", "cls": "footguard-y"}}
+
+
+def test_refresh_tracks_active_window_address():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, {"class": "foot", "title": "t", "address": "0xf00"}, [])
+    assert s.addr == "0xf00"
+    s.refresh(WORKSPACES, ACTIVE_WS, None, [])    # no active window
+    assert s.addr == ""
