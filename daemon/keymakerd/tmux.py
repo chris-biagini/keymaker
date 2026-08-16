@@ -61,8 +61,9 @@ PANES_FORMAT = "#{session_name}\t#{window_index}\t#{pane_current_command}\t#{pan
 # Claude Code's idle/attention title glyph. While working the glyph animates
 # through spinner frames that vary by version, so busy is defined as "any OTHER
 # leading non-ASCII glyph" rather than an allowlist of frames.
-_IDLE_GLYPH = "✳"          # ✳
+_IDLE_GLYPH = "✳"          # U+2733
 _TITLE_MAX = 40
+_SESSION_MAX = 20
 
 
 def _ascii(text):
@@ -77,13 +78,13 @@ def parse_bells(out):
         parts = line.split("\t", 3)
         if len(parts) != 4:
             continue
-        s, idx, bell, name = parts
+        s, idx, bell, _name = parts
         try:
             i = int(idx)
         except ValueError:
             continue
         if bell == "1":
-            items.append({"s": s, "i": i, "name": _ascii(name)[:_TITLE_MAX]})
+            items.append({"s": _ascii(s)[:_SESSION_MAX], "i": i})
     return items
 
 
@@ -101,12 +102,14 @@ def parse_claude_panes(out):
             i = int(idx)
         except ValueError:
             continue
-        busy = False
-        if title and ord(title[0]) > 127:
-            busy = title[0] != _IDLE_GLYPH
-            title = title[1:]
-        items.append({"s": s, "i": i, "busy": busy,
-                      "title": _ascii(title).strip()[:_TITLE_MAX]})
+        # A glyphless title means Claude Code never OSC-set it -- tmux's default
+        # pane_title is the HOSTNAME, which would render as a bogus "waiting"
+        # task. No glyph, no entry; a bell still covers a title-less Claude.
+        if not title or ord(title[0]) <= 127:
+            continue
+        busy = title[0] != _IDLE_GLYPH
+        items.append({"s": _ascii(s)[:_SESSION_MAX], "i": i, "busy": busy,
+                      "title": _ascii(title[1:]).strip()[:_TITLE_MAX]})
     return items
 
 

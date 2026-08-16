@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+
+import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,16 +26,31 @@ def _ledger_none():
 
 
 # LineCodec discards lines over 1024 bytes WHOLE -- an uncapped ledger would
-# render fine on a quiet bench and then silently blank the OLED on the busiest
-# day, which is exactly when it matters. Cap at the producer. Waiting Claudes
-# sort ahead of busy ones so the cap sheds the least interesting entries.
+# render fine on a quiet bench and then silently show a STALE ledger on the
+# busiest day (state-shaped protocol: nothing retransmits until the next
+# change), which is exactly when it matters. Field caps live in tmux.py
+# (_TITLE_MAX/_SESSION_MAX); count caps here; and because JSON escaping can
+# still inflate quote-heavy titles (review 2026-08-16 measured 1313 B worst
+# case pre-fix), the encoded size is CHECKED, shedding busy-last entries until
+# it fits. Waiting Claudes sort first so the shedding order is least-interesting.
 LEDGER_MAX_CLAUDES = 4
 LEDGER_MAX_BELLS = 6
+LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 1024
 
 
 def _ledger_msg(claudes, bells):
     claudes = sorted(claudes, key=lambda c: c["busy"])[:LEDGER_MAX_CLAUDES]
-    return {"t": "ledger", "claudes": claudes, "bells": bells[:LEDGER_MAX_BELLS]}
+    bells = bells[:LEDGER_MAX_BELLS]
+    while True:
+        msg = {"t": "ledger", "claudes": claudes, "bells": bells}
+        if len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES:
+            return msg
+        if claudes:
+            claudes = claudes[:-1]
+        elif bells:
+            bells = bells[:-1]
+        else:
+            return msg
 
 
 def _session_name(label):

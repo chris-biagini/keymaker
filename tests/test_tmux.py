@@ -105,9 +105,11 @@ def test_parse_bells_keeps_only_rung_windows():
            "oracle\t2\t1\toracle\n"
            "sysop\t1\t1\tchris\n"
            "bad line\n")
+    # window name is deliberately NOT carried: the pad renders only s:i, and
+    # the dead payload cost most of the 1024-byte line margin (review 2026-08-16)
     assert tmux.parse_bells(out) == [
-        {"s": "oracle", "i": 2, "name": "oracle"},
-        {"s": "sysop", "i": 1, "name": "chris"},
+        {"s": "oracle", "i": 2},
+        {"s": "sysop", "i": 1},
     ]
 
 
@@ -115,12 +117,13 @@ def test_parse_claude_panes_classifies_by_title_glyph():
     out = ("mirepoix\t1\tclaude\t✳ Triage issues\n"        # idle glyph -> waiting
            "oracle\t1\tclaude\t◐ Fix tmux rename\n"        # spinner frame -> busy
            "oracle\t2\tbash\tchris@nexus:~\n"                   # not claude: skipped
-           "sysop\t1\tclaude\tno glyph at all\n")               # glyphless -> waiting
+           "sysop\t1\tclaude\tno glyph at all\n")               # glyphless: excluded
     got = tmux.parse_claude_panes(out)
+    # glyphless means Claude never OSC-set the title -- tmux's default is the
+    # HOSTNAME, which would show as a bogus waiting task; bells still cover it
     assert got == [
         {"s": "mirepoix", "i": 1, "busy": False, "title": "Triage issues"},
         {"s": "oracle", "i": 1, "busy": True, "title": "Fix tmux rename"},
-        {"s": "sysop", "i": 1, "busy": False, "title": "no glyph at all"},
     ]
 
 
@@ -137,8 +140,10 @@ def test_parse_titles_are_ascii_sanitized_and_truncated():
     got = tmux.parse_claude_panes(out)
     assert got[0]["title"].startswith("caf ")           # é stripped for terminalio
     assert len(got[0]["title"]) <= 40
-    bells = tmux.parse_bells("s\t1\t1\tcafé\n")
-    assert bells[0]["name"] == "caf"
+    long_session = "s" * 40
+    got = tmux.parse_claude_panes(long_session + "\t1\tclaude\t✳ hi\n")
+    assert got[0]["s"] == "s" * 20                      # session names capped too
+    assert tmux.parse_bells(long_session + "\t1\t1\tx\n")[0]["s"] == "s" * 20
 
 
 def test_ledger_listers_none_on_failure():

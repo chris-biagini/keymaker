@@ -356,7 +356,7 @@ def test_ledger_emission_is_state_shaped_sorted_and_capped(monkeypatch, tmp_path
                {"s": "c", "i": 1, "busy": True, "title": "t3"},
                {"s": "d", "i": 1, "busy": False, "title": "t4"},
                {"s": "e", "i": 1, "busy": True, "title": "t5"}]
-    bells = [{"s": "b", "i": 3, "name": "w"}]
+    bells = [{"s": "b", "i": 3}]
 
     async def fake_bells(*a, **k):
         return bells
@@ -380,8 +380,22 @@ def test_ledger_emission_is_state_shaped_sorted_and_capped(monkeypatch, tmp_path
     assert len(ledgers) == 1                      # state-shaped
     got = ledgers[0]["claudes"]
     assert len(got) == LEDGER_MAX_CLAUDES         # capped for the 1024B line limit
-    assert [c["busy"] for c in got] == [False, False, True, True]   # waiting first
+    # stable sort: the two waiting entries in arrival order, then busy; e shed
+    assert [c["s"] for c in got] == ["b", "d", "a", "c"]
     assert ledgers[0]["bells"] == bells
+
+
+def test_ledger_msg_sheds_entries_to_fit_line_limit():
+    from keymakerd.__main__ import _ledger_msg, LEDGER_MAX_BYTES
+    import km_proto
+    # quote-heavy titles JSON-escape to 2 bytes/char: worst case measured
+    # 1313B before the size check existed (review 2026-08-16)
+    claudes = [{"s": "s" * 20, "i": 1, "busy": False, "title": '\"' * 20}
+               for _ in range(4)]
+    bells = [{"s": "s" * 20, "i": 1} for _ in range(6)]
+    msg = _ledger_msg(claudes, bells)
+    assert len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES
+    assert msg["bells"]                            # sheds claudes before bells
 
 
 def test_link_up_snapshot_includes_ledger(monkeypatch, tmp_path):
