@@ -14,22 +14,33 @@ LOOPS = 8
 KICK, SNARE, HAT = "kick", "snare", "hat"
 
 # Okabe-Ito, CVD-safe (spec section 9)
-COL_GREEN = 0x009E73
-COL_AMBER = 0xE69F00
-COL_RED = 0xD55E00
-COL_ACCENT = 0xF0E442
+# Verdict colors, chosen at the bench 2026-08-16: the load-bearing
+# distinction (in the pocket vs not) sits on the blue axis, which survives
+# every CVD type — bluish-green vs orange did not survive a 150 ms NeoPixel
+# flash. All values still Okabe-Ito.
+COL_GOOD = 0x56B4E9    # sky blue — on time
+COL_LATE = 0xE69F00    # orange — dragging
+COL_EARLY = 0xCC79A7   # reddish purple — rushing
+COL_MISS = 0xD55E00    # vermillion — miss / stray
+COL_ACCENT = 0xF0E442  # yellow — downbeat flash
 
 _K = (0, 8, 16, 24)
 _S = (4, 12, 20, 28)
 _H = tuple(range(0, 32, 2))
 
 STAGES = (
-    {"name": "metronome", "pattern": {}, "swing": False, "variance": False},
-    {"name": "on the one", "pattern": {KICK: (0, 16)}, "swing": False, "variance": False},
-    {"name": "backbeat", "pattern": {KICK: _K, SNARE: _S}, "swing": False, "variance": False},
-    {"name": "the pocket", "pattern": {KICK: _K, SNARE: _S, HAT: _H}, "swing": False, "variance": False},
-    {"name": "swing", "pattern": {KICK: _K, SNARE: _S, HAT: _H}, "swing": True, "variance": False},
-    {"name": "off the grid", "pattern": {KICK: _K, SNARE: _S}, "swing": False, "variance": True},
+    {"name": "metronome", "hint": "free play",
+     "pattern": {}, "swing": False, "variance": False},
+    {"name": "on the one", "hint": "kick on the 1",
+     "pattern": {KICK: (0, 16)}, "swing": False, "variance": False},
+    {"name": "backbeat", "hint": "kick 1+3 snare 2+4",
+     "pattern": {KICK: _K, SNARE: _S}, "swing": False, "variance": False},
+    {"name": "the pocket", "hint": "+ hats on 8ths",
+     "pattern": {KICK: _K, SNARE: _S, HAT: _H}, "swing": False, "variance": False},
+    {"name": "swing", "hint": "dial swings the hats",
+     "pattern": {KICK: _K, SNARE: _S, HAT: _H}, "swing": True, "variance": False},
+    {"name": "off the grid", "hint": "drag the snare late",
+     "pattern": {KICK: _K, SNARE: _S}, "swing": False, "variance": True},
 )
 
 

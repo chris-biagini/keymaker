@@ -16,15 +16,17 @@ except ImportError:
 DRUM_KEYS = {9: km_coach.KICK, 10: km_coach.SNARE, 11: km_coach.HAT}
 KEY_OF = {km_coach.KICK: 9, km_coach.SNARE: 10, km_coach.HAT: 11}
 MIDI_NOTES = {km_coach.KICK: 36, km_coach.SNARE: 38, km_coach.HAT: 42}
-VERDICT = {"green": km_coach.COL_GREEN, "amber": km_coach.COL_AMBER,
-           "red": km_coach.COL_RED, "stray": km_coach.COL_RED,
-           "miss": km_coach.COL_RED}
+VERDICT = {"green": km_coach.COL_GOOD, "amber": km_coach.COL_LATE,
+           "red": km_coach.COL_EARLY, "stray": km_coach.COL_MISS,
+           "miss": km_coach.COL_MISS}
 DIM = 0x141414          # resting drum keys
 PULSE = 0x202020        # non-accent beat flash
 NEUTRAL = 0x404040      # unscored hit feedback
+CUE = 0x303030          # "hit me now" pattern cue on drum keys
 LOCKED_SCALE = 0.12
 FLASH_MS = 150
 BEAT_MS = 120
+CUE_MS = 90
 RESULTS_MS = 6000
 HORIZON_MS = 200.0      # emit loops this early so early hits find their slots
 
@@ -46,6 +48,7 @@ class Coach(App):
         self.audio = None
         self.midi = None
         self._flash = {}            # key -> (color, until_ticks)
+        self.cues = []              # upcoming (key, t_ms) pattern cues
         self._beat_until = None
         self._beat_accent = False
         self._px = [None] * 12
@@ -64,7 +67,6 @@ class Coach(App):
                                                out_channel=9)
             except Exception as e:
                 print("midi init failed:", repr(e))
-        self.audio.enable()
         self.mode = "idle"
         self._flash = {}
         self._px = [None] * 12
@@ -124,10 +126,11 @@ class Coach(App):
     def _select(self, s, now):
         unlocked, _ = self._unlocked()
         if s > unlocked:
-            self._flash[s] = (km_coach.COL_RED, ticks_add(now, FLASH_MS))
+            self._flash[s] = (km_coach.COL_MISS, ticks_add(now, FLASH_MS))
             return
         self.stage = s
         self._flash = {}
+        self.cues = []
         self.epoch = now
         q = 60000.0 / self.bpm
         self.quarter = q
@@ -156,6 +159,7 @@ class Coach(App):
         for instr, off in km_coach.loop_grid_ms(self.stage, self.bpm,
                                                 self.swing):
             self.scorer.add_expected(instr, base + off)
+            self.cues.append((KEY_OF[instr], base + off))
 
     def _hit(self, instr, key, now):
         self.audio.play(instr)
@@ -235,6 +239,10 @@ class Coach(App):
                     - HORIZON_MS):
                 self._emit_loop(self.next_loop)
                 self.next_loop += 1
+            while self.cues and t >= self.cues[0][1]:
+                key, _ct = self.cues.pop(0)
+                if key not in self._flash:      # a hit's verdict outranks the cue
+                    self._flash[key] = (CUE, ticks_add(now, CUE_MS))
             for instr, _et in self.scorer.expire(t):
                 self._flash[KEY_OF[instr]] = (VERDICT["miss"],
                                               ticks_add(now, FLASH_MS))
@@ -256,6 +264,8 @@ class Coach(App):
                 else:
                     remaining.append(sess)
             self.queue = remaining
+        if self.audio is not None:
+            self.audio.tick(now)
         self._leds(now)
 
     # ---- output ----------------------------------------------------
@@ -300,19 +310,12 @@ class Coach(App):
                 del self._flash[key]
                 self._px[key] = None            # force repaint next frame
 
-    def _best(self):
-        try:
-            info = (self.hstate.get("stages") or {}).get(str(self.stage))
-            return "  best " + str(int(float(info["best"]) * 100.0 + 0.5)) + "%"
-        except Exception:
-            return ""
-
     def _draw_idle(self):
         st = km_coach.STAGES[self.stage]
         self.screen.set_header("coach")
         self.screen.line1.text = "stage " + str(self.stage) + " " + st["name"]
-        self.screen.line2.text = "bpm " + str(self.bpm) + self._best()
-        self.screen.footer.text = "tap a stage  knob bpm"
+        self.screen.line2.text = st["hint"]
+        self.screen.footer.text = "bpm " + str(self.bpm) + "  tap a stage"
 
     def _draw_play(self):
         st = km_coach.STAGES[self.stage]

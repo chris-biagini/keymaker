@@ -146,6 +146,10 @@ BPM changes apply in idle only (next session); mid-session the grid is fixed.
 - Mixer: 4 voices — click, kick, snare, hat; overlapping one-shots never cut
   each other. Click voice plays `click_hi` (beat 1) or `click_lo` (2/3/4).
   Speaker level fixed; system volume remains Cockpit's job.
+- `SPEAKER_ENABLE` gates around activity (on at `play()`, off after 1500 ms
+  of silence — longer than the widest click gap at 60 BPM): the PWM output
+  runs continuously and an enabled idle amp emits audible carrier hiss
+  (bench 2026-08-16).
 - WAV recipes (`tools/make_drums.py`, stdlib `wave`+`math`+`random`, peak
   −3 dBFS, all durations/frequencies bench-tunable): kick = sine sweep
   120→45 Hz, 180 ms, exp decay; snare = 185 Hz tone (80 ms) + white noise
@@ -160,9 +164,18 @@ BPM changes apply in idle only (next session); mid-session the grid is fixed.
 
 ## 9. Panel (LEDs + OLED, ASCII only)
 
-Colors are fixed Okabe-Ito values (CVD-safe, consistent with `INDEX_BINS`):
-on-time `0x009E73` (bluish green), dragging `0xE69F00` (orange), rushing and
-stray/locked `0xD55E00` (vermillion), beat accent `0xF0E442` (yellow).
+Colors are fixed Okabe-Ito values, revised at the bench 2026-08-16: bluish
+green vs orange did not survive CVD at 150 ms NeoPixel flash size, so the
+load-bearing distinction (in the pocket vs not) now rides the blue axis.
+On-time `0x56B4E9` (sky blue), dragging `0xE69F00` (orange), rushing
+`0xCC79A7` (reddish purple), miss/stray/locked `0xD55E00` (vermillion),
+beat accent `0xF0E442` (yellow).
+
+**Pattern cues** (bench addition — stage 1 scored 6% when nothing taught
+the pattern): during play, each expected hit flashes its drum key dim white
+(`0x303030`, 90 ms) at its grid slot — a "follow me" guide. A hit's verdict
+flash outranks the cue. The idle card carries a per-stage `hint` line
+("kick on the 1", "kick 1+3 snare 2+4", …) from the stage table.
 
 | State | Keys 0–2 (row 0) | Keys 3–5 | Keys 6–8 | Keys 9–11 (drums) |
 |---|---|---|---|---|
@@ -176,7 +189,7 @@ unlocked, scaled ~0.12 when locked.
 OLED (inverted header per v2 convention, lowercase ASCII):
 
 - idle — header `coach`; line1 `stage <n> <name>` (last selected); line2
-  `bpm 95  best 92%`; footer `tap a stage  knob bpm`
+  `<stage hint>`; footer `bpm 95  tap a stage`
 - playing — header `<n> <name>`; line1 `bpm 95  bar 7/16` (stage 4:
   `swing 62%  bar 7/16`); line2 `acc 91%` live; footer `click = stop`
 - results — header `results  88%` (score in the header, which
@@ -218,8 +231,8 @@ OLED (inverted header per v2 convention, lowercase ASCII):
 
 Green window 35 ms · miss window 120 ms · variance divisor 40 ms · stage-5
 mean-lateness gate +10 ms · unlock mean 0.85 over last 3 · BPM default 95,
-step 5 · flash 150 ms · beat flash 120 ms · velocity 100 · results timeout
-6 s · WAV recipes (§8).
+step 5 · flash 150 ms · beat flash 120 ms · cue flash 90 ms · speaker idle
+gate 1500 ms · velocity 100 · results timeout 6 s · WAV recipes (§8).
 
 ## 13. Out of scope
 

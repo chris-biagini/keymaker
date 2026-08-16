@@ -7,11 +7,18 @@ try:
     import audiomixer
     import audiopwmio
     import board
+    from adafruit_ticks import ticks_diff, ticks_ms
 except ImportError:
     audiopwmio = None
 
 _NAMES = ("click_hi", "click_lo", "kick", "snare", "hat")
 _VOICE = {"click_hi": 0, "click_lo": 0, "kick": 1, "snare": 2, "hat": 3}
+
+# The PWM output runs continuously; with the amp enabled that carrier is an
+# audible idle hiss. Gate SPEAKER_ENABLE around activity instead: on at
+# play(), off after this much silence. Must exceed the widest click gap
+# (1000 ms at 60 BPM) so a session never gates mid-groove.
+IDLE_MS = 1500
 
 
 class CoachAudio:
@@ -20,6 +27,7 @@ class CoachAudio:
         self._enable = getattr(macropad, "_speaker_enable", None)
         self._mixer = None
         self._wavs = {}
+        self._last_play = None
         if audiopwmio is None:
             return
         try:
@@ -47,6 +55,15 @@ class CoachAudio:
         if self._mixer is None or name not in self._wavs:
             return
         try:
+            self.enable()
+            self._last_play = ticks_ms()
             self._mixer.voice[_VOICE[name]].play(self._wavs[name])
         except Exception as e:
             print("audio play failed:", repr(e))
+
+    def tick(self, now):
+        if self._mixer is None or self._last_play is None:
+            return
+        if ticks_diff(now, self._last_play) > IDLE_MS:
+            self.disable()
+            self._last_play = None

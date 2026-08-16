@@ -31,12 +31,19 @@ def _write(name, samples):
 
 
 def kick():
+    # Bench 2026-08-16: the 120->45 Hz sweep was nearly inaudible on the
+    # MacroPad's ~20 mm speaker (no low end down there). Higher sweep with a
+    # short noise transient reads as "kick" within what the driver can do.
     out, phase = [], 0.0
-    for i in range(int(0.180 * RATE)):
+    for i in range(int(0.160 * RATE)):
         t = i / RATE
-        f = 120.0 * (45.0 / 120.0) ** (t / 0.180)   # exponential pitch sweep
+        f = 190.0 * (50.0 / 190.0) ** (t / 0.160)   # exponential pitch sweep
         phase += 2.0 * math.pi * f / RATE
-        out.append(math.sin(phase) * _env(t, 0.090))
+        out.append(math.sin(phase) * _env(t, 0.075))
+    rng = random.Random(1)                          # deterministic transient
+    n = int(0.003 * RATE)
+    for i in range(n):
+        out[i] += rng.uniform(-0.6, 0.6) * (1.0 - i / n)
     return out
 
 

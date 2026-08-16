@@ -20,3 +20,9 @@ def test_degrades_to_noop_without_audio_libs():
     a.play("kick")
     a.play("nonsense")
     a.disable()
+
+
+def test_degraded_tick_is_noop():
+    a = CoachAudio(FakePad())
+    a.play("kick")
+    a.tick(12345)                           # no ticks libs on host: must not raise
