@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import hyprland, tmux, volume
+from .coach_store import CoachStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher
 
@@ -34,6 +35,8 @@ class Config:
     device: str = os.environ.get("KEYMAKER_DEVICE", "/dev/keymaker-data")
     runtime_dir: Path = Path(os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000"))
     home: Path = Path.home()
+    state_dir: Path = Path(os.environ.get("KEYMAKER_STATE_DIR")
+                           or Path.home() / ".local/state/keymaker")
 
 
 class Supervisor:
@@ -43,6 +46,7 @@ class Supervisor:
         self.muted = False
         self.palette = None
         self.ctx = _ctx_none()
+        self.coach = CoachStore(cfg.state_dir / "coach.json")
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
@@ -76,6 +80,7 @@ class Supervisor:
         except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
+        self.link.send(self.coach.state_msg())
 
     async def _on_palette(self, pal):
         self.palette = pal
@@ -97,6 +102,8 @@ class Supervisor:
             self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
         elif t == "click":
             self._spawn(self._volume(0, True), "volume")
+        elif t == "coach":
+            self._spawn(self._coach_session(msg.get("session")), "coach")
 
     async def _dispatch(self, cmd):
         if self._instance is not None:
@@ -119,6 +126,15 @@ class Supervisor:
         except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
+
+    async def _coach_session(self, session):
+        if not isinstance(session, dict):
+            return
+        try:
+            self.coach.append(session)
+        except Exception as e:
+            print(f"keymakerd: coach store failed: {e!r}", flush=True)
+        self.link.send(self.coach.state_msg())
 
     # ---- hyprland side --------------------------------------------
     async def _hypr_events(self):

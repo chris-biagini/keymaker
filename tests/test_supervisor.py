@@ -290,3 +290,37 @@ def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
         return selected
 
     assert asyncio.run(scenario()) == [("mirepoix", 1), ("mirepoix", 6)]
+
+
+class TestCoachMessages:
+    # NOTE: Config's field defaults (env lookups) evaluate at import time,
+    # so tests pass state_dir explicitly — monkeypatching the env after
+    # import would silently do nothing.
+    def test_coach_session_persists_and_acks_with_state(self, tmp_path):
+        cfg = Config(state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+
+        async def go():
+            sup._on_pad_msg({"t": "coach", "session": {
+                "stage": 1, "bpm": 95, "swing": None, "greens": 16,
+                "ambers": 0, "reds": 0, "misses": 0, "strays": 0,
+                "score": 1.0, "duration_ms": 40000}})
+            await asyncio.gather(*sup._tasks)
+        asyncio.run(go())
+
+        assert len(sup.coach.load()) == 1
+        states = [m for m in sent if m.get("t") == "coach"]
+        assert states and states[-1]["stages"]["1"]["best"] == 1.0
+
+    def test_coach_ignores_garbage_session(self, tmp_path):
+        sup = Supervisor(Config(state_dir=tmp_path))
+        sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
+
+        async def go():
+            sup._on_pad_msg({"t": "coach", "session": "not-a-dict"})
+            sup._on_pad_msg({"t": "coach"})
+            await asyncio.gather(*sup._tasks)
+        asyncio.run(go())
+        assert sup.coach.load() == []
