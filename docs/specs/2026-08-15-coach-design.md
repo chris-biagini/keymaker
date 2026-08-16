@@ -94,6 +94,11 @@ off-beat hat moves from `Q/2` (straight) to `(s/100)·Q`, `s ∈ [50, 67]`
 
 States: `idle → countin → playing → results → idle`.
 
+Exception — **stage 0 is not session-shaped**: tapping it starts an endless
+metronome (clicks + beat flash, drums live, nothing scored, no count-in);
+knob-click returns to idle. Nothing is recorded. The fixed 16-bar session
+applies to stages 1–5.
+
 - **idle**: keys 0–5 select a stage (tap an unlocked stage → `countin`;
   locked stage → brief red flash). Bottom-row drums always live (sound +
   MIDI, unscored). Dial = BPM, 60–140, 5/detent, default 95. Knob-click =
@@ -116,7 +121,7 @@ BPM changes apply in idle only (next session); mid-session the grid is fixed.
 | Dir | Message | When |
 |---|---|---|
 | p→h | `{"t":"coach","session":{"stage":n,"bpm":n,"swing":n\|null,"greens":n,"ambers":n,"reds":n,"misses":n,"strays":n,"score":f,"duration_ms":n}}` | session end; queued in RAM if link down, flushed on link-up |
-| h→p | `{"t":"coach","unlocked":n,"stages":{"1":{"best":f,"recent":[f,…≤3]},…},"practice_ms":n}` | in the connect snapshot, and after each accepted session (state-shaped ack: the pad learns its session landed by receiving refreshed state) |
+| h→p | `{"t":"coach","unlocked":n,"graduated":bool,"stages":{"1":{"best":f,"recent":[f,…≤3]},…},"practice_ms":n}` | in the connect snapshot, and after each accepted session (state-shaped ack: the pad learns its session landed by receiving refreshed state) |
 
 - `coach.json`: `{"version":1,"history":[{…session fields…,"ts":"iso8601"}]}`.
   Daemon stamps `ts` at receipt (the pad has no clock). Everything else —
@@ -156,7 +161,7 @@ stray/locked `0xD55E00` (vermillion), beat accent `0xF0E442` (yellow).
 |---|---|---|---|---|
 | idle | stages 0–2 | stages 3–5 | dark | dim gray `0x141414` |
 | countin/playing | beat flash: accent yellow on 1, dim white pulse on 2/3/4, ~120 ms | dark | dark | rest dim gray; hit → 150 ms flash in verdict color; miss → vermillion flash on the expected drum at window expiry |
-| results | unlock fanfare sweep if earned, else dark | dark | dark | dim gray |
+| results | stage keys repaint with refreshed unlock state — a newly unlocked stage lighting up is the fanfare | (keys 3–5 same) | dark | dim gray |
 
 Stage-select colors = `km_palette.INDEX_BINS[stage]`, full brightness when
 unlocked, scaled ~0.12 when locked.
