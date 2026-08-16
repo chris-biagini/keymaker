@@ -5,12 +5,28 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hyprland, volume
+from . import hyprland, tmux, volume
 from .serial_link import SerialLink
 from .theme import ThemeWatcher
 
 PING_S = 5.0
 DEBOUNCE_S = 0.1
+CTX_POLL_S = 1.0
+
+
+def _ctx_none():
+    return {"t": "ctx", "mode": "none", "session": None, "items": []}
+
+
+def _session_name(label):
+    """footguard's fg_session_name, ported: tmux/systemd-safe session name."""
+    s = label
+    for ch in ".:/":
+        s = s.replace(ch, "-")
+    s = "-".join(s.split())
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s.strip("-")
 
 
 @dataclass
@@ -26,6 +42,7 @@ class Supervisor:
         self.state = hyprland.HyprState()
         self.muted = False
         self.palette = None
+        self.ctx = _ctx_none()
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
@@ -53,6 +70,7 @@ class Supervisor:
             self.link.send(self.palette)
         for m in self.state.snapshot():
             self.link.send(m)
+        self.link.send(self.ctx)
         try:
             _, self.muted = await volume.status()
         except (OSError, ValueError, IndexError):
@@ -69,9 +87,12 @@ class Supervisor:
         if t == "hello":
             self._spawn(self._on_link_up(), "link-up")
         elif t == "key":
-            n = int(msg.get("n", 0)) + 1                  # key 0 → workspace 1
-            verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
-            self._spawn(self._dispatch(f"dispatch {verb} {n}"), "dispatch")
+            n = int(msg.get("n", 0))
+            if n < 6:                                     # top half: workspaces 1-6
+                verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
+                self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
+            elif 6 <= n <= 11 and msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
+                self._spawn(self._select_window(self.ctx["session"], n - 5), "tmux-select")
         elif t == "dial":
             self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
         elif t == "click":
@@ -83,6 +104,10 @@ class Supervisor:
                 await hyprland.request(self._instance, cmd)
             except OSError:
                 self._instance = None
+
+    async def _select_window(self, session, i):
+        if not await tmux.select_window(session, i):
+            print(f"keymakerd: select-window {session}:{i} failed", flush=True)
 
     async def _volume(self, direction, toggle):
         try:
@@ -145,10 +170,36 @@ class Supervisor:
             await asyncio.sleep(PING_S)
             self.link.send({"t": "ping"})
 
+    async def _context(self):
+        while True:
+            await asyncio.sleep(CTX_POLL_S)
+            cls = self.state.cls
+            new = _ctx_none()
+            if cls.startswith("footguard-"):
+                candidates = [cls.removeprefix("footguard-")]
+                label = self.state.names.get(str(self.state.active))
+                if label:
+                    fallback = _session_name(label)
+                    if fallback and fallback not in candidates:
+                        candidates.append(fallback)
+                try:
+                    for session in candidates:
+                        items = await tmux.list_windows(session)
+                        if items is not None:
+                            new = {"t": "ctx", "mode": "tmux", "session": session,
+                                   "items": [w for w in items if 1 <= w["i"] <= 6]}
+                            break
+                except Exception as e:
+                    print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
+            if new != self.ctx:
+                self.ctx = new
+                self.link.send(new)
+
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)
         await asyncio.gather(self.link.run(), self._hypr_events(),
-                             self._refresher(), self._pinger(), theme.run())
+                             self._refresher(), self._pinger(),
+                             self._context(), theme.run())
 
 
 def main():
