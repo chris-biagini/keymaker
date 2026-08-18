@@ -87,7 +87,10 @@ class HyprState:
             changed = on != self.screencast
             self.screencast = on
             return False, changed
-        if name == "urgent":
+        # "bell" is the xdg-system-bell spelling of urgency: Hyprland >= 0.5x
+        # emits it (and does NOT set client urgency or an "urgent" event) when a
+        # terminal rings BEL via the system-bell protocol, which foot now uses.
+        if name in ("urgent", "bell"):
             self._urgent_addrs.add(data.removeprefix("0x"))
             return True, False
         return name in REFRESH_EVENTS, False

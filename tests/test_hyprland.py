@@ -45,6 +45,17 @@ def test_urgent_event_address_is_normalized_and_cleared_on_focus():
     assert msgs[0]["urgent"] == []
 
 
+def test_bell_event_is_treated_as_urgent():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    needs_refresh, _ = s.handle_event("bell", "5f2280")
+    assert needs_refresh
+    msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert msgs[0]["urgent"] == [5]
+    msgs = s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)
+    assert msgs[0]["urgent"] == []
+
+
 def test_submap_and_screencast_touch_flags_only():
     s = HyprState()
     assert s.handle_event("submap", "resize") == (False, True)
