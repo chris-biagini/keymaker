@@ -132,7 +132,7 @@ FG_CLIENTS = [
 ]
 
 
-def test_refresh_builds_per_workspace_footguard_map():
+def test_refresh_builds_per_workspace_ws_map():
     s = HyprState()
     s.refresh(WORKSPACES, ACTIVE_WS, WIN, FG_CLIENTS)
     # ws 2 has two ws- windows: lowest focusHistoryID (most recent) wins

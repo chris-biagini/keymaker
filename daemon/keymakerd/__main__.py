@@ -54,7 +54,7 @@ def _ledger_msg(claudes, bells):
 
 
 def _session_name(label):
-    """footguard's fg_session_name, ported: tmux/systemd-safe session name."""
+    """ported from ws-attach's fg_session_name: tmux/systemd-safe session name."""
     s = label
     for ch in ".:/":
         s = s.replace(ch, "-")
