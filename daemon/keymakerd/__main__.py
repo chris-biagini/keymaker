@@ -53,17 +53,6 @@ def _ledger_msg(claudes, bells):
             return msg
 
 
-def _session_name(label):
-    """ported from ws-attach's fg_session_name: tmux/systemd-safe session name."""
-    s = label
-    for ch in ".:/":
-        s = s.replace(ch, "-")
-    s = "-".join(s.split())
-    while "--" in s:
-        s = s.replace("--", "-")
-    return s.strip("-")
-
-
 @dataclass
 class Config:
     device: str = os.environ.get("KEYMAKER_DEVICE", "/dev/keymaker-data")
@@ -254,7 +243,7 @@ class Supervisor:
                 candidates = [client["cls"].removeprefix("ws-")]
                 label = self.state.names.get(str(self.state.active))
                 if label:
-                    fallback = _session_name(label)
+                    fallback = hyprland.session_name(label)
                     if fallback and fallback not in candidates:
                         candidates.append(fallback)
                 try:

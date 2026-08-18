@@ -91,6 +91,26 @@ def test_ws_color_hashes_plain_name():
     assert ws_color(None) is None
 
 
+def test_session_name_sanitizes_like_ws_attach():
+    # Twin of wsid_session_name in ~/oracle/scripts/workspace-identity-lib.
+    from keymakerd.hyprland import session_name
+    assert session_name("keymaker") == "keymaker"
+    assert session_name("wacky sax") == "wacky-sax"
+    assert session_name("a.b:c/d") == "a-b-c-d"
+    assert session_name(" x ") == "x"
+    assert session_name("note: draft") == "note-draft"
+    assert session_name("ch. 2 notes") == "ch-2-notes"
+    assert session_name("a..b") == "a-b"
+    assert session_name("foo. bar") == "foo-bar"
+
+
+def test_ws_color_hashes_sanitized_name():
+    from keymakerd.hyprland import ws_color
+    # "wacky sax" sanitizes to "wacky-sax"; cksum("wacky-sax")=840069188, mod 7 = 0 -> dark bin 0.
+    assert ws_color("wacky sax") == "f0a52d"
+    assert ws_color("wacky sax") == ws_color("wacky-sax")
+
+
 def test_refresh_includes_workspace_colors():
     s = HyprState()
     wss = [

@@ -29,12 +29,29 @@ def posix_cksum(data):
     return (~crc) & 0xFFFFFFFF
 
 
+def session_name(label):
+    """tmux/systemd-safe session name from a workspace label.
+    Ported from wsid_session_name in ~/oracle/scripts/workspace-identity-lib —
+    keep both in sync."""
+    s = label
+    for ch in ".:/":
+        s = s.replace(ch, "-")
+    s = "-".join(s.split())
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s.strip("-")
+
+
 def ws_color(name, light=False):
-    """hash(workspace name) -> palette hex, or None for unnamed (bare-digit) names."""
+    """hash(sanitized session name) -> palette hex, or None for unnamed (bare-digit) names.
+    Hashes the SANITIZED form so the bar (which hashes plain workspace names)
+    and the pad/tmux side (which hashes the sanitized session name) agree even
+    when a name needs sanitizing, e.g. workspace "wacky sax" -> session
+    "wacky-sax"."""
     if not name or name.isdigit():
         return None
     pal = PALETTE_LIGHT if light else PALETTE_DARK
-    return pal[posix_cksum(name.encode()) % len(pal)]
+    return pal[posix_cksum(session_name(name).encode()) % len(pal)]
 
 
 def ws_label(name):
