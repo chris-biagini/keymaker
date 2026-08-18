@@ -72,11 +72,21 @@ def test_snapshot_always_returns_both_messages():
     assert ts == ["win", "ws"]
 
 
-def test_ws_color_parses_workspace_identity_span():
+def test_posix_cksum_matches_coreutils():
+    # Vectors generated with: printf '%s' NAME | cksum
+    from keymakerd.hyprland import posix_cksum
+    assert posix_cksum(b"mirepoix") == 1440240219
+    assert posix_cksum(b"oracle") == 3207680428
+    assert posix_cksum(b"1") == 433426081
+    assert posix_cksum(b"wacky-sax") == 840069188
+
+
+def test_ws_color_hashes_plain_name():
     from keymakerd.hyprland import ws_color
-    assert ws_color("2·<span foreground='#E14B00'>mirepoix</span>") == "e14b00"
-    assert ws_color('x<span foreground="#5AB4FF">y</span>') == "5ab4ff"
-    assert ws_color("plain-name") is None
+    assert ws_color("mirepoix") == "e14b00"          # bin 5 dark
+    assert ws_color("oracle") == "5ab4ff"            # bin 1 dark
+    assert ws_color("mirepoix", light=True) == "78694b"
+    assert ws_color("4") is None                     # unnamed: bare id, no color
     assert ws_color("") is None
     assert ws_color(None) is None
 
@@ -84,8 +94,8 @@ def test_ws_color_parses_workspace_identity_span():
 def test_refresh_includes_workspace_colors():
     s = HyprState()
     wss = [
-        {"id": 2, "windows": 1, "name": "2·<span foreground='#E14B00'>mirepoix</span>"},
-        {"id": 3, "windows": 1, "name": "3·<span foreground='#5AB4FF'>macropad</span>"},
+        {"id": 2, "windows": 1, "name": "mirepoix"},
+        {"id": 3, "windows": 1, "name": "oracle"},
         {"id": 4, "windows": 1, "name": "4"},
     ]
     msgs = s.refresh(wss, {"id": 2}, None, [])
@@ -93,10 +103,9 @@ def test_refresh_includes_workspace_colors():
     assert ws["colors"] == {"2": "e14b00", "3": "5ab4ff"}
 
 
-def test_ws_label_strips_identity_markup():
+def test_ws_label_plain_names():
     from keymakerd.hyprland import ws_label
-    assert ws_label("2·<span foreground='#E14B00'>mirepoix</span>") == "mirepoix"
-    assert ws_label("plain-name") == "plain-name"
+    assert ws_label("mirepoix") == "mirepoix"
     assert ws_label("4") is None            # unnamed: bare id
     assert ws_label("") is None
     assert ws_label(None) is None
@@ -105,13 +114,13 @@ def test_ws_label_strips_identity_markup():
 def test_refresh_includes_workspace_names():
     s = HyprState()
     wss = [
-        {"id": 2, "windows": 1, "name": "2·<span foreground='#E14B00'>mirepoix</span>"},
-        {"id": 3, "windows": 1, "name": "3·<span foreground='#5AB4FF'>macropad</span>"},
+        {"id": 2, "windows": 1, "name": "mirepoix"},
+        {"id": 3, "windows": 1, "name": "oracle"},
         {"id": 4, "windows": 1, "name": "4"},
     ]
     msgs = s.refresh(wss, {"id": 2}, None, [])
     ws = next(m for m in msgs if m["t"] == "ws")
-    assert ws["names"] == {"2": "mirepoix", "3": "macropad"}
+    assert ws["names"] == {"2": "mirepoix", "3": "oracle"}
 
 
 FG_CLIENTS = [

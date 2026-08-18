@@ -10,7 +10,7 @@ from pathlib import Path
 from . import hyprland, tmux, volume
 from .coach_store import CoachStore
 from .serial_link import SerialLink
-from .theme import ThemeWatcher
+from .theme import ThemeWatcher, resolve_theme_dir
 
 PING_S = 5.0
 DEBOUNCE_S = 0.1
@@ -121,6 +121,16 @@ class Supervisor:
     async def _on_palette(self, pal):
         self.palette = pal
         self.link.send(pal)
+        # Light/dark decides which Okabe-Ito palette ws_color hashes into
+        # (hyprland.PALETTE_DARK/LIGHT); re-resolved here since this callback
+        # already fires on every theme change (ThemeWatcher only calls it when
+        # colors.toml's mtime moves). light.mode is Omarchy's marker file, a
+        # sibling of colors.toml in the same theme dir.
+        theme_dir = resolve_theme_dir(self.cfg.home)
+        light = bool(theme_dir) and (theme_dir / "light.mode").exists()
+        if light != self.state.light:
+            self.state.light = light
+            self._refresh_wanted.set()
 
     # ---- inbound from pad -----------------------------------------
     def _on_pad_msg(self, msg):

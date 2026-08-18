@@ -1,24 +1,47 @@
 """Hyprland IPC: instance discovery, one-shot requests, event stream state."""
 import asyncio
-import re
 from pathlib import Path
 
-_WS_COLOR_RE = re.compile(r"foreground=['\"]#?([0-9a-fA-F]{6})")
-_TAG_RE = re.compile(r"<[^>]*>")
-_ID_PREFIX_RE = re.compile(r"^\d+·")
+# 7-bin Okabe-Ito palettes, verbatim from ~/oracle/scripts/workspace-identity-lib
+# (the bash home of the same constants — change both or neither).
+PALETTE_DARK = ["f0a52d", "5ab4ff", "c3ffe1", "87875a", "4b8796", "e14b00", "ffd2f0"]
+PALETTE_LIGHT = ["c36900", "0087e1", "002d1e", "3c3c00", "003cc3", "78694b", "4b003c"]
+
+_CKSUM_TABLE = []
+for _i in range(256):
+    _c = _i << 24
+    for _ in range(8):
+        _c = ((_c << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if _c & 0x80000000 else (_c << 1) & 0xFFFFFFFF
+    _CKSUM_TABLE.append(_c)
 
 
-def ws_color(name):
-    """Workspace-identity color embedded in a workspace name, or None."""
-    m = _WS_COLOR_RE.search(name or "")
-    return m.group(1).lower() if m else None
+def posix_cksum(data):
+    """POSIX cksum CRC (NOT zlib crc32): length bytes appended, final complement.
+    Must match coreutils `cksum` exactly — it is the color-hash contract with
+    the bash side (wsid_color in workspace-identity-lib)."""
+    crc = 0
+    for b in data:
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CKSUM_TABLE[((crc >> 24) ^ b) & 0xFF]
+    length = len(data)
+    while length:
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CKSUM_TABLE[((crc >> 24) ^ (length & 0xFF)) & 0xFF]
+        length >>= 8
+    return (~crc) & 0xFFFFFFFF
+
+
+def ws_color(name, light=False):
+    """hash(workspace name) -> palette hex, or None for unnamed (bare-digit) names."""
+    if not name or name.isdigit():
+        return None
+    pal = PALETTE_LIGHT if light else PALETTE_DARK
+    return pal[posix_cksum(name.encode()) % len(pal)]
 
 
 def ws_label(name):
-    """Human label from a workspace name (identity markup stripped), or None."""
+    """Human label from a workspace name, or None for unnamed (bare-digit) names."""
     if not name:
         return None
-    text = _ID_PREFIX_RE.sub("", _TAG_RE.sub("", name)).strip()
+    text = name.strip()
     if not text or text.isdigit():
         return None
     return text
@@ -68,6 +91,7 @@ class HyprState:
         self.urgent_ws = []
         self.colors = {}
         self.names = {}
+        self.light = False
         self.cls = ""
         self.title = ""
         self.addr = ""
@@ -127,7 +151,7 @@ class HyprState:
         self.fg = {ws: entry for ws, (_, entry) in fg.items()}
         colors = {}
         for w in workspaces:
-            c = ws_color(w.get("name"))
+            c = ws_color(w.get("name"), light=self.light)
             if c is not None:
                 colors[str(w["id"])] = c
         names = {}
