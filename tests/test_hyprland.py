@@ -177,3 +177,12 @@ def test_refresh_tracks_active_window_address():
     assert s.addr == "0xf00"
     s.refresh(WORKSPACES, ACTIVE_WS, None, [])    # no active window
     assert s.addr == ""
+
+
+def test_renameworkspace_triggers_refresh():
+    # Hyprland emits renameworkspace>>ID,NAME (verified live 2026-08-18).
+    # Without it in REFRESH_EVENTS a rename only reaches the pad by luck,
+    # riding whatever unrelated event fires next.
+    from keymakerd.hyprland import HyprState
+    s = HyprState()
+    assert s.handle_event("renameworkspace", "1,wacky-sax") == (True, False)

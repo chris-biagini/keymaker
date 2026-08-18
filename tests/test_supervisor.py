@@ -447,3 +447,19 @@ class TestCoachMessages:
         assert sup.coach.load() == []
         states = [m for m in sent if m.get("t") == "coach"]
         assert states and states[-1]["unlocked"] == 1
+
+
+def test_dispatch_oserror_keeps_instance(tmp_path):
+    # A transient IPC failure in _dispatch must NOT clear _instance:
+    # only _hypr_events can rediscover it, and its trigger (socket2 death)
+    # never fires on a healthy compositor — so clearing here permanently
+    # killed the refresher (observed live 2026-08-18: frozen ws colors,
+    # zero request-socket connects while events flowed).
+    async def scenario():
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        sup = Supervisor(cfg)
+        dead = tmp_path / "hypr" / "gone"      # no .socket.sock -> OSError
+        sup._instance = dead
+        await sup._dispatch("dispatch workspace 2")
+        assert sup._instance is dead           # still set; owner heals it
+    asyncio.run(scenario())

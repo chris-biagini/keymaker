@@ -67,7 +67,7 @@ def ws_label(name):
 REFRESH_EVENTS = {
     "workspace", "workspacev2", "focusedmon", "openwindow", "closewindow",
     "movewindow", "activewindow", "activewindowv2", "urgent", "fullscreen",
-    "monitoradded", "monitorremoved",
+    "monitoradded", "monitorremoved", "renameworkspace",
 }
 
 

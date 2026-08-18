@@ -143,11 +143,16 @@ class Supervisor:
             self._spawn(self._coach_session(msg.get("session")), "coach")
 
     async def _dispatch(self, cmd):
+        # Swallow transient IPC failures WITHOUT clearing _instance:
+        # _hypr_events owns that handle (it rediscovers after its socket2
+        # connection dies, which is what a real Hyprland restart looks like).
+        # Clearing it here permanently disabled the refresher, since nothing
+        # else could ever set it again (live incident 2026-08-18).
         if self._instance is not None:
             try:
                 await hyprland.request(self._instance, cmd)
-            except OSError:
-                self._instance = None
+            except OSError as e:
+                print(f"keymakerd: dispatch failed ({e!r}): {cmd}", flush=True)
 
     async def _activate_window(self, ctx, i):
         """Tap on a bottom key: focus the workspace's foot window if it isn't
