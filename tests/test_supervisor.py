@@ -163,11 +163,11 @@ def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        # footguard window on the active workspace -- focus is irrelevant now
-        sup.state.fg = {1: {"addr": "0xb", "cls": "footguard-mirepoix"}}
+        # ws- window on the active workspace -- focus is irrelevant now
+        sup.state.fg = {1: {"addr": "0xb", "cls": "ws-mirepoix"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
-        sup.state.active = 2                        # workspace with no footguard
+        sup.state.active = 2                        # workspace with no ws-
         await asyncio.sleep(0.15)
         task.cancel()
         return sent
@@ -201,7 +201,7 @@ def test_context_watcher_filters_slots_and_degrades(monkeypatch, tmp_path):
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {1: {"addr": "0xa", "cls": "footguard-x"}}
+        sup.state.fg = {1: {"addr": "0xa", "cls": "ws-x"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
         task.cancel()
@@ -228,7 +228,7 @@ def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {1: {"addr": "0xa", "cls": "footguard-x"}}
+        sup.state.fg = {1: {"addr": "0xa", "cls": "ws-x"}}
         task = asyncio.create_task(sup._context())
         await asyncio.sleep(0.2)
         alive = not task.done()
@@ -240,7 +240,8 @@ def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
     assert ctx == []                  # degraded to none == initial state, no emission
 
 
-def test_session_name_sanitizes_like_footguard():
+def test_session_name_sanitizes_like_ws_attach():
+    # Twin of wsid_session_name in ~/oracle/scripts/workspace-identity-lib.
     from keymakerd.__main__ import _session_name
     assert _session_name("keymaker") == "keymaker"
     assert _session_name("wacky sax") == "wacky-sax"
@@ -253,7 +254,7 @@ def test_session_name_sanitizes_like_footguard():
 
 
 def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_path):
-    # Rename case: class frozen at footguard-macropad, session now "keymaker".
+    # Rename case: class frozen at ws-macropad, session now "keymaker".
     import keymakerd.__main__ as main_mod
     from keymakerd import tmux as tmuxmod
 
@@ -270,7 +271,7 @@ def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {3: {"addr": "0xm", "cls": "footguard-macropad"}}
+        sup.state.fg = {3: {"addr": "0xm", "cls": "ws-macropad"}}
         sup.state.active = 3
         sup.state.names = {"3": "keymaker"}
         task = asyncio.create_task(sup._context())

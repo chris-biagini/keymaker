@@ -243,15 +243,15 @@ class Supervisor:
 
     async def _context(self):
         # The deck is WORKSPACE-aware, not focus-gated: keys 6-11 track the
-        # footguard window living on the active workspace whether or not it holds
+        # ws-attach window living on the active workspace whether or not it holds
         # focus, so the bottom half stays lit while you're in the browser next to
-        # it. Workspaces with no footguard window still cost nothing (no poll).
+        # it. Workspaces with no ws-attach window still cost nothing (no poll).
         while True:
             await asyncio.sleep(CTX_POLL_S)
             client = self.state.fg.get(self.state.active)
             new = _ctx_none()
             if client is not None:
-                candidates = [client["cls"].removeprefix("footguard-")]
+                candidates = [client["cls"].removeprefix("ws-")]
                 label = self.state.names.get(str(self.state.active))
                 if label:
                     fallback = _session_name(label)
