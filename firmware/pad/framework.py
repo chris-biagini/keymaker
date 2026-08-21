@@ -1,5 +1,5 @@
 """Main loop: input polling, link polling, app switching via encoder long-press."""
-from adafruit_ticks import ticks_diff, ticks_ms
+from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 
 from km_keys import KeyTracker
 
@@ -49,6 +49,7 @@ def run(macropad, apps):
 
     active = 0
     menu_idx = None            # not None → menu is open
+    ledtest_until = None       # ticks_ms deadline for a debug LED frame; None = inactive
     enc_tracker = KeyTracker(hold_ms=HOLD_MENU_MS, diff=ticks_diff)
     last_pos = macropad.encoder
     link.send({"t": "hello", "fw": "0.1.0", "app": apps[active].name})
@@ -68,6 +69,8 @@ def run(macropad, apps):
                 if menu_idx is not None:
                     active, menu_idx = menu_idx, None
                     link.send({"t": "hello", "fw": "0.1.0", "app": apps[active].name})
+                    ledtest_until = None       # a switch outranks any debug frame
+                    macropad.pixels.auto_write = True
                     macropad.pixels.fill(0)
                     try:
                         apps[active].on_show()
@@ -107,10 +110,38 @@ def run(macropad, apps):
             event = macropad.keys.events.get()
 
         for m in link.poll(now):
+            # Debug LED frame (host-side palette eyeballing). There is no
+            # framework "LED pass" to skip -- apps repaint all 12 pixels every
+            # tick -- but no app ever calls pixels.show(), so gating auto_write
+            # freezes the visible frame while apps keep their state fresh via
+            # on_msg/tick. rgb is already post-gamma PWM: the daemon linearizes.
+            if m.get("t") == "ledtest":
+                try:
+                    macropad.pixels.auto_write = False
+                    for i, rgb in enumerate(m.get("rgb", [])[:12]):
+                        macropad.pixels[i] = tuple(rgb)
+                    macropad.pixels.show()
+                    ledtest_until = ticks_add(now, int(m.get("hold", 30)) * 1000)
+                except Exception as e:
+                    # A raise here with auto_write already off would strand the
+                    # LEDs frozen forever -- restore before giving up.
+                    print("ledtest error:", repr(e))
+                    ledtest_until = None
+                    macropad.pixels.auto_write = True
+                continue                       # never reaches the app
             try:
                 apps[active].on_msg(m)
             except Exception as e:
                 print("on_msg error:", repr(e))
+
+        if ledtest_until is not None and ticks_diff(now, ledtest_until) >= 0:
+            ledtest_until = None
+            macropad.pixels.auto_write = True
+            if menu_idx is None:               # the menu paints no pixels
+                try:
+                    apps[active].on_show()     # repaint current state
+                except Exception as e:
+                    print("on_show error:", repr(e))
 
         if menu_idx is not None:
             screen.set_header("apps")

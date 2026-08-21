@@ -7,7 +7,7 @@ import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hyprland, tmux, volume
+from . import hyprland, ledtest, tmux, volume
 from .coach_store import CoachStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher, resolve_theme_dir
@@ -283,9 +283,14 @@ class Supervisor:
 
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)
+        # ledtest: spike-grade debug bridge for palette eyeballing. Always via
+        # cfg.state_dir so test_supervisor.py's tmp_path stays hermetic; the
+        # watcher idles harmlessly when the spool never appears.
         await asyncio.gather(self.link.run(), self._hypr_events(),
                              self._refresher(), self._pinger(),
-                             self._context(), theme.run())
+                             self._context(), theme.run(),
+                             ledtest.watch(str(self.cfg.state_dir / "ledtest.json"),
+                                           self.link.send))
 
 
 def main():
