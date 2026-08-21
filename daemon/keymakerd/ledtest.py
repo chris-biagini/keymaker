@@ -17,15 +17,20 @@ GAMMA = 2.2
 N_KEYS = 12
 HOLD_MIN, HOLD_MAX = 1, 300
 
+# int(x, 16) is NOT a hex-digit check: it accepts signs and surrounding
+# whitespace. int("-1", 16) == -1, and a negative base to a fractional power is
+# complex -- round(complex) raises TypeError, which watch() does not catch and
+# which therefore kills the daemon. "+1" and " f" are quieter but just as wrong,
+# rendering a color nobody asked for. So validate the digits explicitly.
+_HEX_DIGITS = "0123456789abcdefABCDEF"
+
 
 def linearize(hex_str):
     """'#rrggbb' (gamma-encoded, as a designer picks it) -> PWM ints."""
-    if not (isinstance(hex_str, str) and len(hex_str) == 7 and hex_str[0] == "#"):
+    if not (isinstance(hex_str, str) and len(hex_str) == 7 and hex_str[0] == "#"
+            and all(c in _HEX_DIGITS for c in hex_str[1:])):
         raise ValueError(f"bad hex {hex_str!r}")
-    try:
-        v = tuple(int(hex_str[i:i + 2], 16) for i in (1, 3, 5))
-    except ValueError:
-        raise ValueError(f"bad hex {hex_str!r}")
+    v = tuple(int(hex_str[i:i + 2], 16) for i in (1, 3, 5))
     return tuple(round(255 * (c / 255) ** GAMMA) for c in v)
 
 

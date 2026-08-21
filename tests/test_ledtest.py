@@ -29,6 +29,13 @@ def test_parse_spool_happy():
     json.dumps({"colors": ["#ff0000"] * 12, "hold": True}),      # bool is not an int here
     json.dumps({"colors": ["#gg0000"] * 12, "hold": 30}),        # non-hex digits
     json.dumps({"colors": ["ff0000"] * 12, "hold": 30}),         # missing leading '#'
+    # int(x, 16) accepts signs and whitespace, so these once got PAST the hex
+    # guard: "#-10000" reached negative-base gamma math -> complex -> round()
+    # TypeError -> escaped watch() -> killed the daemon. The other two rendered
+    # a silently wrong color. All three must be ValueError at the front door.
+    json.dumps({"colors": ["#-10000"] * 12, "hold": 30}),        # signed: was a TypeError
+    json.dumps({"colors": ["#+10000"] * 12, "hold": 30}),        # signed: rendered black
+    json.dumps({"colors": ["# f0000"] * 12, "hold": 30}),        # space: rendered near-black
 ])
 def test_parse_spool_rejects(doc):
     with pytest.raises(ValueError):
