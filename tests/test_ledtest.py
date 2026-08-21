@@ -6,10 +6,18 @@ import pytest
 from keymakerd import ledtest
 
 
-def test_linearize_endpoints_and_mid():
-    assert ledtest.linearize("#000000") == (0, 0, 0)
-    assert ledtest.linearize("#ffffff") == (255, 255, 255)
-    assert ledtest.linearize("#808080") == (56, 56, 56)   # round(255*(128/255)**2.2)
+def test_to_pixels_matches_the_app_path_with_no_gamma_decode():
+    """The bridge must store the byte the app would store, unmodified.
+
+    #808080 used to become (56,56,56) here via a 2.2 decode while Cockpit sent
+    (128,128,128), so the same hex rendered two different brightnesses and the
+    eyeball test measured a renderer that does not ship. Decoding is also not
+    recoverable: a cell at the measured comfort floor decodes to PWM 0.
+    """
+    assert ledtest.to_pixels("#000000") == (0, 0, 0)
+    assert ledtest.to_pixels("#ffffff") == (255, 255, 255)
+    assert ledtest.to_pixels("#808080") == (128, 128, 128)
+    assert ledtest.linearize is ledtest.to_pixels   # old name still resolves
 
 
 def test_parse_spool_happy():

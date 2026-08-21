@@ -114,7 +114,9 @@ def run(macropad, apps):
             # framework "LED pass" to skip -- apps repaint all 12 pixels every
             # tick -- but no app ever calls pixels.show(), so gating auto_write
             # freezes the visible frame while apps keep their state fresh via
-            # on_msg/tick. rgb is already post-gamma PWM: the daemon linearizes.
+            # on_msg/tick. rgb is the byte triple the app path would store: the
+            # daemon does NOT gamma-decode, so this renders identically to a
+            # Cockpit key of the same color (see keymakerd/ledtest.py).
             if m.get("t") == "ledtest":
                 try:
                     macropad.pixels.auto_write = False
