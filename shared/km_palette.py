@@ -38,10 +38,13 @@ def urgent_factor(phase):
     """Pulse factor for a bell/urgent key: never below an occupied key."""
     return URGENT_FLOOR + (1.0 - URGENT_FLOOR) * phase
 
-# Canonical Okabe-Ito hues, canonical order — window index N always gets bin N,
-# on the pad AND in the tmux status bar (which uses the hue-locked WSID
-# variants of these same bins). LEDs are emissive, so the saturated canonical
-# values render truest; terminal text needs the contrast-tuned variants.
+# Canonical Okabe-Ito hues in canonical order. Window index N always gets bin N.
+# Used by ctx_key_color (the split-deck bottom half) and firmware/apps/coach.py
+# for stage colours. LEDs are emissive, so the saturated canonical values render
+# truest.
+#
+# NOTE: The tmux status bar no longer uses these. As of colorhash 2026-08-21,
+# @wsid_win1..6 take darkFg/lightFg directly from ~/.config/colorhash/palette.json.
 INDEX_BINS = ("E69F00", "56B4E9", "009E73", "F0E442", "0072B2", "D55E00")
 
 
