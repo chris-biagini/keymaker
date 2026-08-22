@@ -23,9 +23,18 @@ class Cockpit(App):
         self.flags = {"submap": "", "screencast": False, "muted": False}
         self.palette = dict(km_palette.DEFAULT)
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
+        # Last frame actually written to the strip. `pixels.auto_write` stays True
+        # (see framework.py) so every `pixels[i] = ...` drives the whole strip
+        # immediately; writing only the pixels that changed keeps a static deck
+        # at zero writes per tick instead of a clear-then-repaint strobe. None
+        # forces a full first paint.
+        self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
+        # A ledtest repaints via on_show; a stale cache would leave that debug
+        # frame stuck instead of being redrawn.
+        self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
         self._draw_all(ticks_ms())
 
     def on_msg(self, msg):
@@ -66,14 +75,19 @@ class Cockpit(App):
         # there is no _pulse_phase helper.
         phase = (now % 1000) / 1000
         phase = phase * 2 if phase < 0.5 else (1 - phase) * 2
-        for i in range(km_deck.SLOTS_PER_PAGE):
-            self.pad.pixels[i] = 0x000000
-        if not self.link.up:
-            return
-        for slot in self.deck["slots"]:
-            ws_hex = self.deck["ws"][slot["c"]][1]
-            self.pad.pixels[slot["i"]] = km_palette.deck_key_color(
-                slot["s"], ws_hex, phase)
+        frame = [0x000000] * km_deck.SLOTS_PER_PAGE
+        if self.link.up:
+            for slot in self.deck["slots"]:
+                ws_hex = self.deck["ws"][slot["c"]][1]
+                frame[slot["i"]] = km_palette.deck_key_color(slot["s"], ws_hex, phase)
+        # auto_write is True (framework.py:114-116), so every pixel assignment
+        # drives the whole strip immediately. Writing only the pixels that
+        # changed keeps a static deck at zero writes per tick and stops the
+        # clear-then-repaint pass from strobing the hardware.
+        for i, c in enumerate(frame):
+            if c != self._led_frame[i]:
+                self.pad.pixels[i] = c
+        self._led_frame = frame
 
     def _draw_text(self, now):
         if not self.link.up:
