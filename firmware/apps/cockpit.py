@@ -117,11 +117,14 @@ class Cockpit(App):
         # counts column, while `pages` counts every page the KEYS can reach.
         # Passing `pages` would draw boxes off the right edge of the strip.
         #
-        # set_minimap does map_bmp.fill(0) then redraws the whole bitmap; dirtying
-        # a displayio.Bitmap at tick frequency forces the panel to keep refreshing,
-        # which reads as a flicker. Only repaint when an input actually changed --
-        # the blink phase (twice a second) or the deck itself.
-        sig = (blink, d["page"], tuple(d["map"]), tuple(d["bells"]))
+        # Only recompute when an input actually changed. The blink phase belongs
+        # in the signature ONLY when something is ringing: it flips twice a
+        # second forever, so including it unconditionally means a redraw twice a
+        # second on a completely idle deck -- which is exactly what read as a
+        # periodic blink on the panel. With no bells, blink changes nothing that
+        # gets drawn, so it must not force the redraw either.
+        sig = (blink and bool(d["bells"]), d["page"], tuple(d["map"]),
+               tuple(d["bells"]))
         if sig != self._map_sig:
             self._map_sig = sig
             self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)

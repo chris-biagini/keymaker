@@ -169,3 +169,72 @@ def test_minimap_geometry_lays_pages_out_left_to_right():
     assert km_deck.minimap_cell(0, boxes[0]) == (3, 41)
     assert km_deck.minimap_cell(4, boxes[0]) == (7, 45)      # row 1, col 1
     assert km_deck.minimap_cell(12, boxes[1]) == (22, 41)    # slot 12 -> page 1, key 0
+
+
+def test_minimap_pixels_is_empty_when_there_are_no_pages():
+    # idle_card clears the strip through this path; it must produce a frame the
+    # diff painter can subtract down to a blank bitmap.
+    assert km_deck.minimap_pixels(0, 0, (), (), False) == set()
+
+
+def test_minimap_pixels_outlines_only_the_page_on_the_keys():
+    lit = km_deck.minimap_pixels(3, 1, (0, 0, 0), (), False)
+    for p, (x, y, w, h) in enumerate(km_deck.minimap_boxes(3, y=0)):
+        assert ((x, y) in lit) is (p == 1), "page %d outline wrong" % p
+
+
+def test_minimap_pixels_draws_a_cell_only_where_the_mask_claims_one():
+    lit = km_deck.minimap_pixels(1, 0, (0b101,), (), False)   # bits 0 and 2
+    box = km_deck.minimap_boxes(1, y=0)[0]
+    assert km_deck.minimap_cell(0, box) in lit
+    assert km_deck.minimap_cell(2, box) in lit
+    assert km_deck.minimap_cell(1, box) not in lit
+
+
+def test_minimap_pixels_bells_only_light_on_the_blink_phase():
+    box = km_deck.minimap_boxes(1, y=0)[0]
+    cx, cy = km_deck.minimap_cell(5, box)
+    on = km_deck.minimap_pixels(1, 0, (0,), (5,), True)
+    off = km_deck.minimap_pixels(1, 0, (0,), (5,), False)
+    # 3x3 for a bell vs 2x2 for a plain cell: the far corner is bell-only.
+    assert (cx + 2, cy + 2) in on
+    assert (cx + 2, cy + 2) not in off
+
+
+def test_minimap_pixels_ignores_bells_on_pages_it_cannot_draw():
+    # The keys reach every page; the strip only draws MINIMAP_MAX_PAGES. A bell
+    # past the drawable range must not be painted onto some other page's box.
+    # (page 0 is on the keys, so its outline is lit either way -- the claim is
+    # that the undrawable bell adds nothing, not that the frame is blank.)
+    assert (km_deck.minimap_pixels(1, 0, (0,), (99,), True)
+            == km_deck.minimap_pixels(1, 0, (0,), (), True))
+
+
+def test_minimap_pixels_matches_a_reference_clear_then_repaint():
+    # The diff painter is only correct if the frame it computes equals what the
+    # old fill(0)-then-draw produced. That old routine, reproduced as an oracle.
+    pages, page, masks, bells, blink = 3, 1, (0b1011, 0b1, 0), (13,), True
+    ref = set()
+    boxes = km_deck.minimap_boxes(pages, y=0)
+    for p, (x, y, w, h) in enumerate(boxes):
+        if p == page:
+            for dx in range(w):
+                ref.add((x + dx, y))
+                ref.add((x + dx, y + h - 1))
+            for dy in range(h):
+                ref.add((x, y + dy))
+                ref.add((x + w - 1, y + dy))
+        mask = masks[p] if p < len(masks) else 0
+        for i in range(km_deck.SLOTS_PER_PAGE):
+            if not mask >> i & 1:
+                continue
+            cx, cy = km_deck.minimap_cell(p * km_deck.SLOTS_PER_PAGE + i, (x, y, w, h))
+            for dx in range(2):
+                for dy in range(2):
+                    ref.add((cx + dx, cy + dy))
+    for gslot in bells:
+        cx, cy = km_deck.minimap_cell(gslot, boxes[gslot // km_deck.SLOTS_PER_PAGE])
+        for dx in range(3):
+            for dy in range(3):
+                ref.add((cx + dx, cy + dy))
+    assert km_deck.minimap_pixels(pages, page, masks, bells, blink) == ref

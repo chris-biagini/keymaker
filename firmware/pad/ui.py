@@ -30,6 +30,9 @@ class Screen:
         pal[1] = 0xFFFFFF
         self.map_tile = displayio.TileGrid(self.map_bmp, pixel_shader=pal, x=0, y=40)
         self.group.append(self.map_tile)
+        # Lit pixels currently on the bitmap, so set_minimap can paint the
+        # difference rather than clear and repaint. See km_deck.minimap_pixels.
+        self._map_lit = set()
         display.root_group = self.group
 
     def set_header(self, text):
@@ -40,51 +43,30 @@ class Screen:
     def set_minimap(self, pages, page, masks, bells, blink):
         """One mini 3x4 deck per page. Spec section 8.2.
 
-        `masks` is a per-page bitmask (km_deck.Deck.message's `map`): bit i set
-        means slot i of that page is occupied. A cell is drawn only for a slot
-        the mask actually claims -- matching bells, which draw at their real
-        global slot -- so a sparse page (a dismissed mid-page ghost, a daemon
-        restart that drops windows without ghosts) never shows a filled cell
-        where nothing lives.
+        Paints the DIFFERENCE against what is already on the bitmap -- never a
+        fill(0) first. displayio refreshes the panel on its own schedule
+        (auto_refresh is on), so a clear-then-repaint hands it a blank frame to
+        scan out, which is what reads as a flicker. Only pixels that actually
+        change are written, so a redraw of an unchanged minimap touches nothing.
+
+        The geometry itself lives in km_deck.minimap_pixels, where pytest can
+        reach it; this method is only the diff and the writes.
         """
         import km_deck
-        self.map_bmp.fill(0)
-        boxes = km_deck.minimap_boxes(pages, y=0)
-        for p, box in enumerate(boxes):
-            # `page` can exceed the drawable range: the keys reach every page, the
-            # minimap only shows the first MINIMAP_MAX_PAGES. When the user is past
-            # that, nothing is outlined and the header's "PAGE 7/9" carries the
-            # position instead. Deliberate -- an outline on the wrong box would lie.
-            if p == page:                       # outline the page on the keys
-                x, y, w, h = box
-                for dx in range(w):
-                    self.map_bmp[x + dx, y] = 1
-                    self.map_bmp[x + dx, y + h - 1] = 1
-                for dy in range(h):
-                    self.map_bmp[x, y + dy] = 1
-                    self.map_bmp[x + w - 1, y + dy] = 1
-            mask = masks[p] if p < len(masks) else 0
-            for i in range(km_deck.SLOTS_PER_PAGE):
-                if not mask >> i & 1:
-                    continue
-                cx, cy = km_deck.minimap_cell(p * km_deck.SLOTS_PER_PAGE + i, box)
-                for dx in range(2):
-                    for dy in range(2):
-                        self.map_bmp[cx + dx, cy + dy] = 1
-        # Bells draw LAST and larger, so an alert is never overdrawn by a plain
-        # cell and reads as different even when caught mid-blink.
-        if blink:
-            for gslot in bells:
-                p = gslot // km_deck.SLOTS_PER_PAGE
-                if p >= len(boxes):
-                    continue
-                cx, cy = km_deck.minimap_cell(gslot, boxes[p])
-                for dx in range(3):
-                    for dy in range(3):
-                        self.map_bmp[cx + dx, cy + dy] = 1
+        want = km_deck.minimap_pixels(pages, page, masks, bells, blink, y=0)
+        for x, y in self._map_lit - want:
+            self.map_bmp[x, y] = 0
+        for x, y in want - self._map_lit:
+            self.map_bmp[x, y] = 1
+        self._map_lit = want
 
     def idle_card(self):
         self.set_header("keymaker")
         self.line1.text = "no link"
         self.line2.text = ""
         self.footer.text = ""
+        # Clear the minimap too: with the link down the deck it describes is
+        # stale, and leaving it lit next to "no link" claims windows we can no
+        # longer see. Goes through the same diff bookkeeping so the next
+        # set_minimap repaints from a correct notion of what is on the bitmap.
+        self.set_minimap(0, 0, (), (), False)
