@@ -1,32 +1,56 @@
 """Hyprland IPC: instance discovery, one-shot requests, event stream state."""
 import asyncio
+import json
+import unicodedata
 from pathlib import Path
 
-# 7-bin Okabe-Ito palettes, verbatim from ~/oracle/scripts/workspace-identity-lib
-# (the bash home of the same constants — change both or neither).
-PALETTE_DARK = ["f0a52d", "5ab4ff", "c3ffe1", "87875a", "4b8796", "e14b00", "ffd2f0"]
-PALETTE_LIGHT = ["c36900", "0087e1", "002d1e", "3c3c00", "003cc3", "78694b", "4b003c"]
+# colorhash replaced the cksum%7 / Okabe-Ito system on 2026-08-21. The palette is
+# DATA now — the same ~/.config/colorhash/palette.json the bash side reads
+# (~/oracle/scripts/workspace-identity-lib). Pad and bar agree because they read one
+# file, not because two hardcoded lists were kept in sync by hand.
+#
+# We take the `led` surface specifically. palette.json carries five renderings per
+# cell and they are NOT interchangeable: `bg` is Petroff's published fill, `lightFg`
+# and `darkFg` are re-lightened for text on a theme ground, and `led` is the one
+# tuned for WS2812s. Using `bg` here would send a color that was never checked
+# against the pad's LEDs.
+PALETTE_FILE = Path.home() / ".config" / "colorhash" / "palette.json"
 
-_CKSUM_TABLE = []
-for _i in range(256):
-    _c = _i << 24
-    for _ in range(8):
-        _c = ((_c << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if _c & 0x80000000 else (_c << 1) & 0xFFFFFFFF
-    _CKSUM_TABLE.append(_c)
+_LED_CACHE = None
 
 
-def posix_cksum(data):
-    """POSIX cksum CRC (NOT zlib crc32): length bytes appended, final complement.
-    Must match coreutils `cksum` exactly — it is the color-hash contract with
-    the bash side (wsid_color in workspace-identity-lib)."""
-    crc = 0
-    for b in data:
-        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CKSUM_TABLE[((crc >> 24) ^ b) & 0xFF]
-    length = len(data)
-    while length:
-        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CKSUM_TABLE[((crc >> 24) ^ (length & 0xFF)) & 0xFF]
-        length >>= 8
-    return (~crc) & 0xFFFFFFFF
+def led_palette(path=None):
+    """The `led` hex column of palette.json, or [] when it is absent/malformed.
+
+    Empty means NO colors get sent, never a fallback set: a wrong-but-plausible
+    palette on the pad is harder to notice than an unlit one.
+    """
+    global _LED_CACHE
+    if path is None and _LED_CACHE is not None:
+        return _LED_CACHE
+    try:
+        data = json.loads((path or PALETTE_FILE).read_text())
+        pal = [str(c["led"]).lstrip("#").lower() for c in data["cells"]]
+        if not all(len(h) == 6 for h in pal):
+            pal = []
+    except (OSError, ValueError, KeyError, TypeError):
+        pal = []
+    if path is None:
+        _LED_CACHE = pal
+    return pal
+
+
+def fnv1a32(text):
+    """FNV-1a 32-bit over UTF-8 bytes of the NFC-normalized string.
+
+    The frozen colorhash contract: FNV1a32(UTF8(NFC(name))). Golden vector —
+    "café" -> 0xa82b5049. Must agree byte-for-byte with wsid_hash in
+    workspace-identity-lib and with lab.html's fnv1a, or pad and bar drift apart.
+    """
+    h = 0x811C9DC5
+    for b in unicodedata.normalize("NFC", text).encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
 
 
 def session_name(label):
@@ -43,15 +67,25 @@ def session_name(label):
 
 
 def ws_color(name, light=False):
-    """hash(sanitized session name) -> palette hex, or None for unnamed (bare-digit) names.
+    """colorhash(sanitized session name) -> LED hex, or None when there is no color.
+
     Hashes the SANITIZED form so the bar (which hashes plain workspace names)
     and the pad/tmux side (which hashes the sanitized session name) agree even
     when a name needs sanitizing, e.g. workspace "wacky sax" -> session
-    "wacky-sax"."""
+    "wacky-sax".
+
+    `light` is accepted and IGNORED. It selected between two theme-tuned palettes
+    under the old system; colorhash's `led` surface is a physical rendering on
+    WS2812s, which have no theme ground to contrast against. The parameter stays
+    so callers (and _on_palette's theme-change refresh) need no edit, and so a
+    future surface that IS theme-dependent has somewhere to land.
+    """
     if not name or name.isdigit():
         return None
-    pal = PALETTE_LIGHT if light else PALETTE_DARK
-    return pal[posix_cksum(session_name(name).encode()) % len(pal)]
+    pal = led_palette()
+    if not pal:
+        return None
+    return pal[fnv1a32(session_name(name)) % len(pal)]
 
 
 def ws_label(name):

@@ -110,11 +110,14 @@ class Supervisor:
     async def _on_palette(self, pal):
         self.palette = pal
         self.link.send(pal)
-        # Light/dark decides which Okabe-Ito palette ws_color hashes into
-        # (hyprland.PALETTE_DARK/LIGHT); re-resolved here since this callback
-        # already fires on every theme change (ThemeWatcher only calls it when
-        # colors.toml's mtime moves). light.mode is Omarchy's marker file, a
-        # sibling of colors.toml in the same theme dir.
+        # Re-resolved here since this callback already fires on every theme change
+        # (ThemeWatcher only calls it when colors.toml's mtime moves). light.mode is
+        # Omarchy's marker file, a sibling of colors.toml in the same theme dir.
+        #
+        # NOTE: since colorhash (2026-08-21) this no longer affects workspace colors —
+        # ws_color reads palette.json's `led` surface, which is a physical WS2812
+        # rendering with no theme ground to contrast against. self.state.light still
+        # drives the rest of the pad's rendering, so the watch stays.
         theme_dir = resolve_theme_dir(self.cfg.home)
         light = bool(theme_dir) and (theme_dir / "light.mode").exists()
         if light != self.state.light:

@@ -72,23 +72,52 @@ def test_snapshot_always_returns_both_messages():
     assert ts == ["win", "ws"]
 
 
-def test_posix_cksum_matches_coreutils():
-    # Vectors generated with: printf '%s' NAME | cksum
-    from keymakerd.hyprland import posix_cksum
-    assert posix_cksum(b"mirepoix") == 1440240219
-    assert posix_cksum(b"oracle") == 3207680428
-    assert posix_cksum(b"1") == 433426081
-    assert posix_cksum(b"wacky-sax") == 840069188
+def test_fnv1a32_matches_the_colorhash_contract():
+    # The frozen vectors from ~/.local/share/chezmoi/colorhash/vectors.json, which
+    # lab.html's runSelfTest and the bash wsid_hash check against too. If this drifts,
+    # the pad and the status bar color the same session differently.
+    from keymakerd.hyprland import fnv1a32
+    assert fnv1a32("") == 0x811C9DC5
+    assert fnv1a32("a") == 0xE40C292C
+    assert fnv1a32("mirepoix") == 0x2F81FEBA
+    assert fnv1a32("oracle") == 0xF4E20EF7
+    assert fnv1a32("café") == 0xA82B5049      # NFC-normalized before encoding
+    assert fnv1a32("recipe box") == 0x9A56501A
+
+
+def test_fnv1a32_normalizes_to_nfc():
+    # The same café spelled with a combining acute must hash identically. This is the
+    # only part of the contract Python enforces that bash cannot.
+    from keymakerd.hyprland import fnv1a32
+    assert fnv1a32("café") == fnv1a32("café")
 
 
 def test_ws_color_hashes_plain_name():
     from keymakerd.hyprland import ws_color
-    assert ws_color("mirepoix") == "e14b00"          # bin 5 dark
-    assert ws_color("oracle") == "5ab4ff"            # bin 1 dark
-    assert ws_color("mirepoix", light=True) == "78694b"
+    assert ws_color("mirepoix") == "e16000"          # cell 6, led surface
+    assert ws_color("oracle") == "ffbc63"            # cell 1, led surface
+    # `light` is accepted and ignored: LEDs have no theme ground to contrast against.
+    assert ws_color("mirepoix", light=True) == ws_color("mirepoix")
     assert ws_color("4") is None                     # unnamed: bare id, no color
     assert ws_color("") is None
     assert ws_color(None) is None
+
+
+def test_ws_color_takes_the_led_surface_not_the_fill():
+    # palette.json's five columns are not interchangeable. `bg` is Petroff's published
+    # fill (#e76300 for cell 6); `led` is the WS2812 rendering (#e16000). Sending the
+    # fill would push a color that was never checked against the pad's hardware.
+    from keymakerd.hyprland import ws_color
+    assert ws_color("mirepoix") != "e76300"
+    assert ws_color("mirepoix") == "e16000"
+
+
+def test_ws_color_is_none_without_a_palette(tmp_path, monkeypatch):
+    # Fail closed: an unlit pad is obvious, a plausible-but-wrong palette is not.
+    from keymakerd import hyprland
+    monkeypatch.setattr(hyprland, "PALETTE_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(hyprland, "_LED_CACHE", None)
+    assert hyprland.ws_color("mirepoix") is None
 
 
 def test_session_name_sanitizes_like_ws_attach():
@@ -106,8 +135,8 @@ def test_session_name_sanitizes_like_ws_attach():
 
 def test_ws_color_hashes_sanitized_name():
     from keymakerd.hyprland import ws_color
-    # "wacky sax" sanitizes to "wacky-sax"; cksum("wacky-sax")=840069188, mod 7 = 0 -> dark bin 0.
-    assert ws_color("wacky sax") == "f0a52d"
+    # "wacky sax" sanitizes to "wacky-sax"; fnv1a32("wacky-sax")=0xaecd57d7, mod 10 = 1.
+    assert ws_color("wacky sax") == "ffbc63"
     assert ws_color("wacky sax") == ws_color("wacky-sax")
 
 
@@ -120,7 +149,7 @@ def test_refresh_includes_workspace_colors():
     ]
     msgs = s.refresh(wss, {"id": 2}, None, [])
     ws = next(m for m in msgs if m["t"] == "ws")
-    assert ws["colors"] == {"2": "e14b00", "3": "5ab4ff"}
+    assert ws["colors"] == {"2": "e16000", "3": "ffbc63"}
 
 
 def test_ws_label_plain_names():
