@@ -1,4 +1,4 @@
-"""keymakerd: supervises serial link, Hyprland stream, theme watcher, volume."""
+"""keymakerd: supervises serial link, Hyprland stream, theme watcher."""
 import asyncio
 import json
 import os
@@ -8,7 +8,7 @@ import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hyprland, ledtest, tmux, volume
+from . import hyprland, ledtest, tmux
 from .deck_store import DeckStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher, resolve_theme_dir
@@ -67,13 +67,11 @@ class Supervisor:
     def __init__(self, cfg):
         self.cfg = cfg
         self.state = hyprland.HyprState()
-        self.muted = False
         self.palette = None
         self.ctx = _ctx_none()
         self.ledger = _ledger_none()
         self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
         self.deck = km_deck.Deck(self.deck_store.load())
-        self.knob_mode = "vol"      # short-press toggles; rotation is volume first
         self.deck_page = 0
         self.deck_msg = None
         # Cache of the deck poll's tmux windows, keyed by id ("tmux:@N"), and of
@@ -108,7 +106,7 @@ class Supervisor:
     # ---- outbound -------------------------------------------------
     def _flags_msg(self):
         return {"t": "flags", "submap": self.state.submap,
-                "screencast": self.state.screencast, "muted": self.muted}
+                "screencast": self.state.screencast}
 
     async def _on_link_up(self):
         self.link.send({"t": "hello", "host": "keymakerd", "proto": 1})
@@ -127,10 +125,6 @@ class Supervisor:
         # before the first poll has ever landed; nothing to send yet then.
         if self.deck_msg is not None:
             self.link.send(self.deck_msg)
-        try:
-            _, self.muted = await volume.status()
-        except (OSError, ValueError, IndexError):
-            pass
         self.link.send(self._flags_msg())
 
     def _on_link_down(self):
@@ -164,7 +158,7 @@ class Supervisor:
         # Clamp rather than trust: windows closing can shrink the page count out
         # from under a page the knob already selected.
         self.deck_page = min(self.deck_page, self.deck.page_count() - 1)
-        return self.deck.message(self.deck_page, self.knob_mode, colors,
+        return self.deck.message(self.deck_page, colors,
                                  focused=focused, bells=bells)
 
     def _resend_deck(self):
@@ -182,13 +176,7 @@ class Supervisor:
             self.deck_msg = msg
             self.link.send(msg)
 
-    def on_knob_press(self):
-        self.knob_mode = "page" if self.knob_mode == "vol" else "vol"
-        self._resend_deck()
-
     def on_knob_turn(self, delta):
-        if self.knob_mode != "page":
-            return                      # volume is handled by the existing path
         pages = self.deck.page_count()
         self.deck_page = (self.deck_page + delta + pages) % pages
         self._resend_deck()
@@ -261,13 +249,7 @@ class Supervisor:
             if msg.get("act") == "tap":                   # hold is reserved: no-op
                 self._spawn(self._on_tap(n), "deck-tap")
         elif t == "dial":
-            d = int(msg.get("d", 0))
-            if self.knob_mode == "page":
-                self.on_knob_turn(d)
-            else:
-                self._spawn(self._volume(d, False), "volume")
-        elif t == "click":
-            self.on_knob_press()
+            self.on_knob_turn(int(msg.get("d", 0)))
 
     async def _dispatch(self, cmd):
         # Swallow transient IPC failures WITHOUT clearing _instance:
@@ -284,17 +266,6 @@ class Supervisor:
     # `_activate_window` (the old ctx-based bottom-half tap handler) is retired:
     # `_focus_deck_window` below does the same job -- focus the client, then
     # select-window -- against deck slots instead of ctx's fixed 6-11 range.
-
-    async def _volume(self, direction, toggle):
-        try:
-            if toggle:
-                await volume.toggle_mute()
-            elif direction:
-                await volume.step(direction)
-            _, self.muted = await volume.status()
-        except (OSError, ValueError, IndexError):
-            pass
-        self.link.send(self._flags_msg())
 
     # ---- hyprland side --------------------------------------------
     async def _hypr_events(self):

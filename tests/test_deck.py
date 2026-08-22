@@ -90,19 +90,28 @@ def test_message_carries_only_the_current_page_with_ws_by_reference():
     # Caller order is preserved (km_deck no longer sorts), so "mirepoix" --
     # listed first -- claims slot 0 and is the first ws entry.
     d.update([w("tmux:@1", "mirepoix", "1 rails"), w("tmux:@2", "colorhash", "1 lab")])
-    m = d.message(page=0, knob="page", colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
+    m = d.message(page=0, colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
     assert m["t"] == "deck"
     assert m["ws"] == [["mirepoix", "e16000"], ["colorhash", "6d0a9e"]]
     assert m["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "live"},
                           {"i": 1, "c": 1, "n": "1 lab", "s": "live"}]
-    assert m["pages"] == 1 and m["page"] == 0 and m["knob"] == "page"
+    assert m["pages"] == 1 and m["page"] == 0
+
+
+def test_message_no_longer_carries_a_knob_mode():
+    # The knob has exactly one mode now (paging), so a mode field on the wire
+    # would be a constant the pad has to branch on for no reason.
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a", "n": "1 sh"}])
+    msg = d.message(0, {"a": "ff0000"})
+    assert "knob" not in msg
 
 
 def test_message_marks_focused_bell_and_ghost_states():
     d = km_deck.Deck()
     d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2"), w("tmux:@3", "a", "3")])
     d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])   # @3 ghosts at slot 2
-    m = d.message(page=0, knob="vol", colors={"a": "ffffff"},
+    m = d.message(page=0, colors={"a": "ffffff"},
                   focused="tmux:@1", bells=["tmux:@2"])
     states = {s["i"]: s["s"] for s in m["slots"]}
     assert states == {0: "focused", 1: "bell", 2: "ghost"}
@@ -111,7 +120,7 @@ def test_message_marks_focused_bell_and_ghost_states():
 def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
     d = km_deck.Deck()
     d.update([w("tmux:@%d" % i, "a", "%02d" % i) for i in range(20)])
-    m = d.message(page=0, knob="page", colors={"a": "ffffff"}, bells=["tmux:@15"])
+    m = d.message(page=0, colors={"a": "ffffff"}, bells=["tmux:@15"])
     assert m["bells"] == [15]                  # slot 15 lives on page 1, not shown
     assert all(s["i"] < 12 for s in m["slots"])
     # `map` is a per-page BITMASK, not a count: page 0 has all 12 slots
@@ -129,7 +138,7 @@ def test_map_is_a_bitmask_not_a_count_so_sparse_pages_agree_with_bells():
     # bell actually lives.
     d = km_deck.Deck({"tmux:@1": 0, "tmux:@2": 7})
     d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])
-    m = d.message(page=0, knob="vol", colors={"a": "ffffff"}, bells=["tmux:@2"])
+    m = d.message(page=0, colors={"a": "ffffff"}, bells=["tmux:@2"])
     assert m["map"] == [0b10000001]             # bits 0 and 7 set, nothing between
     assert m["bells"] == [7]
 
@@ -146,7 +155,7 @@ def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
                      "%d some-long-window-name-here" % i)
                    for i in range(win_count)]
         d.update(windows)
-        m = d.message(page=0, knob="page",
+        m = d.message(page=0,
                       colors={("workspace-%d-very-long-name-string" % i): "e16000" for i in range(20)},
                       bells=["tmux:@%d" % i for i in range(win_count)])
         # Workspace names are trimmed to ws_max (default 12).

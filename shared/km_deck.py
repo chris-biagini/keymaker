@@ -69,7 +69,7 @@ class Deck:
         top = max(used) + 1 if used else 0
         return max(1, (top + SLOTS_PER_PAGE - 1) // SLOTS_PER_PAGE)
 
-    def message(self, page, knob, colors, focused=None, bells=(), name_max=14, ws_max=12):
+    def message(self, page, colors, focused=None, bells=(), name_max=14, ws_max=12):
         """The wire message for one page. See spec section 9.
 
         Workspaces are sent ONCE by reference and names trimmed: workspace names
@@ -77,7 +77,8 @@ class Deck:
         over-long line is DISCARDED, not truncated -- an overflow would silently
         blank the pad. bells and map are bounded to MINIMAP_MAX_PAGES because the
         OLED screen can only draw that many page boxes; bells on undrawable pages
-        and map entries beyond that point are pointless to send.
+        and map entries beyond that point are pointless to send. The knob only
+        pages now, so no mode is carried here.
         """
         bells = set(bells)
         lo = page * SLOTS_PER_PAGE
@@ -110,7 +111,7 @@ class Deck:
             if page_idx < MINIMAP_MAX_PAGES:
                 masks[page_idx] |= 1 << (slot % SLOTS_PER_PAGE)
         return {
-            "t": "deck", "page": page, "pages": pages, "knob": knob,
+            "t": "deck", "page": page, "pages": pages,
             "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
             "slots": slots, "map": masks,
             "bells": sorted(s for s in (self.slots[w] for w in bells if w in self.slots) if s < MINIMAP_MAX_PAGES * SLOTS_PER_PAGE),

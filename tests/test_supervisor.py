@@ -112,50 +112,6 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     assert not any(d.startswith("dispatch movetoworkspacesilent") for d in dispatched)
 
 
-def test_link_up_reports_current_mute_state(monkeypatch, tmp_path):
-    from keymakerd import volume as vol
-    from keymakerd.__main__ import Config, Supervisor
-
-    async def fake_status():
-        return (0.4, True)
-
-    async def scenario():
-        monkeypatch.setattr(vol, "status", fake_status)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._on_link_up()
-        return sent
-
-    sent = asyncio.run(scenario())
-    flags = next(m for m in sent if m["t"] == "flags")
-    assert flags["muted"] is True
-
-
-def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
-    from keymakerd import volume as vol
-    from keymakerd.__main__ import Config, Supervisor
-
-    async def boom(*a):
-        raise OSError("wpctl missing")
-
-    async def scenario():
-        monkeypatch.setattr(vol, "toggle_mute", boom)
-        monkeypatch.setattr(vol, "status", boom)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._volume(0, True)
-        return sent
-
-    sent = asyncio.run(scenario())
-    assert any(m["t"] == "flags" for m in sent)
-
-
 def _quiet_ledger(monkeypatch):
     """Keep _poll_ledger AND _poll_deck off the real tmux server during ctx tests.
 
@@ -460,7 +416,7 @@ def test_link_up_resends_the_deck(tmp_path):
     # trip) must not stay stuck on its empty default deck until some
     # unrelated window event happens to change the computed message.
     sup = _supervisor(tmp_path)
-    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1,
                     "ws": [["mirepoix", "e16000"]],
                     "slots": [{"i": 0, "c": 0, "n": "1 rails", "s": "live"}],
                     "map": [1], "bells": []}
@@ -488,7 +444,7 @@ def test_link_drop_clears_deck_msg_so_the_next_poll_resends(tmp_path):
     # re-emit on its next pass rather than staying silent because the computed
     # message is unchanged from before the drop.
     sup = _supervisor(tmp_path)
-    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1,
                     "ws": [], "slots": [], "map": [0], "bells": []}
     sup._on_link_down()
     assert sup.deck_msg is None
@@ -520,23 +476,9 @@ def test_deck_message_is_emitted_from_live_state(tmp_path, monkeypatch):
     assert msg["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "focused"}]
 
 
-def test_knob_press_toggles_mode_and_rotation_only_pages_in_page_mode(tmp_path):
-    sup = _supervisor(tmp_path)
-    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
-    assert sup.knob_mode == "vol"
-    sup.on_knob_press()
-    assert sup.knob_mode == "page"
-    sup.on_knob_turn(1)
-    assert sup.deck_page == 1
-    sup.on_knob_press()                          # back to volume
-    sup.on_knob_turn(1)
-    assert sup.deck_page == 1                    # rotation no longer pages
-
-
 def test_paging_wraps_and_never_lands_on_a_page_that_does_not_exist(tmp_path):
     sup = _supervisor(tmp_path)
     sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
-    sup.knob_mode = "page"
     sup.on_knob_turn(-1)
     assert sup.deck_page == 1                    # wrapped backwards
     sup.on_knob_turn(1)
@@ -569,7 +511,7 @@ def test_slots_persist_across_a_supervisor_restart(tmp_path):
     assert again.deck.slots == {"tmux:@7": 0}
 
 
-def test_click_and_dial_resend_the_deck_message_immediately(tmp_path):
+def test_dial_resends_the_deck_message_immediately(tmp_path):
     # Without this, a knob gesture is invisible on the pad until the next
     # _poll_deck cycle, up to CTX_POLL_S (1s) later -- reads as a broken knob.
     sup = _supervisor(tmp_path)
@@ -579,20 +521,15 @@ def test_click_and_dial_resend_the_deck_message_immediately(tmp_path):
     # Simulate a poll having already landed once, without running one for real.
     sup._deck_render_args = ({"a": "ffffff"}, None, set())
 
-    sup._on_pad_msg({"t": "click"})                  # vol -> page
-    assert sup.knob_mode == "page"
-    assert sent and sent[-1]["t"] == "deck" and sent[-1]["knob"] == "page"
-
-    sup._on_pad_msg({"t": "dial", "d": 1})            # page mode: pages immediately
+    sup._on_pad_msg({"t": "dial", "d": 1})            # pages immediately
     assert sup.deck_page == 1
-    assert sent[-1]["t"] == "deck" and sent[-1]["page"] == 1
+    assert sent and sent[-1]["t"] == "deck" and sent[-1]["page"] == 1
 
 
 def test_knob_gestures_before_the_first_poll_send_nothing(tmp_path):
     sup = _supervisor(tmp_path)
     sent = []
     sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-    sup._on_pad_msg({"t": "click"})
     sup._on_pad_msg({"t": "dial", "d": 1})
     assert sent == []                                 # no _deck_render_args yet: no crash, no send
 

@@ -1,6 +1,6 @@
 """Cockpit: the switchboard deck. Keys are sticky slots over every running
-terminal window, one page (12 slots) at a time; knob pages or adjusts volume
-depending on daemon-side mode; OLED = identity + attention ledger."""
+terminal window, one page (12 slots) at a time; knob pages; OLED = identity
++ attention ledger."""
 from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_deck
@@ -16,11 +16,11 @@ class Cockpit(App):
     name = "cockpit"
 
     def __init__(self):
-        self.deck = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+        self.deck = {"t": "deck", "page": 0, "pages": 1,
                      "ws": [], "slots": [], "map": [0], "bells": []}
         self.ledger = {"t": "ledger", "claudes": [], "bells": []}
         self.win = {"cls": "", "title": ""}
-        self.flags = {"submap": "", "screencast": False, "muted": False}
+        self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
         # Last frame actually written to the strip. `pixels.auto_write` stays True
@@ -125,24 +125,19 @@ class Cockpit(App):
         if sig != self._map_sig:
             self._map_sig = sig
             self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
-        # Badges carried over from the pre-switchboard header; a separate
-        # ruling in this plan removed the pad's mute *gesture*, so dropping
-        # its indicator too would take away the control and its display in
-        # the same release. Mode is shortened to P1/2 (was PAGE 1/2) to leave
-        # room for badges inside the 21-column header. Composition (which
-        # badges survive when the line is tight, and never truncating the
-        # mode) is km_text.header_line's job, not inline arithmetic here --
-        # that arithmetic proved buggy once already (round 3: it ate "P10/12"
-        # down to "P1" under badge pressure) while sitting in untestable
-        # firmware.
+        # Badges carried over from the pre-switchboard header. Mode is
+        # shortened to P1/2 (was PAGE 1/2) to leave room for badges inside
+        # the 21-column header. Composition (which badges survive when the
+        # line is tight, and never truncating the mode) is km_text.header_line's
+        # job, not inline arithmetic here -- that arithmetic proved buggy once
+        # already (round 3: it ate "P10/12" down to "P1" under badge pressure)
+        # while sitting in untestable firmware.
         badges = []
         if self.flags["screencast"]:
             badges.append("REC")
-        if self.flags["muted"]:
-            badges.append("MUTE")
         if self.flags["submap"]:
             badges.append("[" + self.flags["submap"] + "]")
-        mode = ("P%d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
+        mode = "P%d/%d" % (d["page"] + 1, d["pages"])
         header = header_line("nexus", badges, mode, WIDTH_CHARS)
         # set_header touches every glyph in the inverted bar; skip the write
         # when the text hasn't changed instead of re-setting it every tick.
