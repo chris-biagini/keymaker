@@ -259,7 +259,7 @@ def _is_terminal(cls):
     return c in TERMINAL_CLASSES or c.startswith("ws-")
 
 
-def deck_windows(tmux_windows, clients, workspaces):
+def deck_windows(tmux_windows, clients):
     """Windows that earn a key, as [{id, ws, n}] for km_deck.Deck.update."""
     ws_of_session = {}
     used_addrs = set()

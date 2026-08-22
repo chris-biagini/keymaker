@@ -29,10 +29,19 @@ class DeckStore:
         if not isinstance(raw, dict):
             return {}
         out = {}
+        seen_slots = set()
         for wid, slot in raw.items():
-            if isinstance(wid, str) and isinstance(slot, int) \
-                    and not isinstance(slot, bool) and 0 <= slot <= MAX_SLOT:
-                out[wid] = slot
+            if not (isinstance(wid, str) and isinstance(slot, int)
+                    and not isinstance(slot, bool) and 0 <= slot <= MAX_SLOT):
+                continue
+            # Two ids mapping to the same slot survives naive validation, and
+            # Deck.message then silently drops one -- a live window with no
+            # key for its whole life. Keep the first, drop the rest (dict
+            # iteration order is JSON key order, so "first" is well-defined).
+            if slot in seen_slots:
+                continue
+            seen_slots.add(slot)
+            out[wid] = slot
         return out
 
     def save(self, slots):

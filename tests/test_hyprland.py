@@ -231,7 +231,7 @@ DECK_TWINS = [
 
 
 def test_only_signalling_locally_reachable_windows_earn_a_key():
-    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])
+    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)
     ids = [g["id"] for g in got]
     assert "tmux:@2" in ids            # tmux window in a ws-* session
     assert "hypr:0xcc" in ids          # bare foot, signals via Hyprland bell
@@ -242,13 +242,13 @@ def test_only_signalling_locally_reachable_windows_earn_a_key():
 
 
 def test_tmux_windows_take_the_workspace_of_their_ws_client():
-    got = {g["id"]: g for g in hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])}
+    got = {g["id"]: g for g in hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)}
     assert got["tmux:@2"]["ws"] == "mirepoix"
     assert got["tmux:@2"]["n"] == "1 rails"       # index carried into the label
 
 
 def test_unnamed_workspaces_render_white_not_nothing():
-    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])
+    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)
     colors = hyprland.deck_colors(got)
     assert colors["mirepoix"] == "e16000"
     assert colors["4"] == "ffffff"                # bare-digit name: no identity

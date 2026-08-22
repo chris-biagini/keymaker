@@ -138,12 +138,23 @@ async def list_claude_panes(run=_run):
 # The deck keys off #{window_id} (@7), NOT session:index. Indices move under
 # move-window, swap-window and renumber-windows, any of which would silently
 # reshuffle every key and defeat sticky allocation in the way hardest to notice.
+#
+# Field order: session, window_id, index, active, bell, name -- NOTE active
+# (field 4) precedes bell (field 5). An earlier draft had them swapped, and
+# the inversion was invisible in review because the fixture's all-zero third
+# row can't distinguish the two positions; only a fixture with a bell but no
+# active flag (or vice versa) catches it (see test_tmux.py). This inversion
+# is what BLOCKED an earlier task, it is invisible to anyone editing the
+# format string above without re-deriving it, and the failure mode -- a
+# silent active/bell swap on the pad -- would ship quietly, not crash.
 DECK_FORMAT = ("#{session_name}\t#{window_id}\t#{window_index}\t"
                "#{window_active}\t#{window_bell_flag}\t#{window_name}")
 
 
 def parse_deck_windows(out):
-    """Every window on the server as [{id, s, i, n, active, bell}]."""
+    """Every window on the server as [{id, s, i, n, active, bell}]. Field
+    order matches DECK_FORMAT above: session, window_id, index, active,
+    bell, name."""
     items = []
     for line in out.splitlines():
         parts = line.split("\t", 5)

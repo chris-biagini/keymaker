@@ -158,9 +158,10 @@ def test_ledger_listers_none_on_failure():
 
 
 def test_parse_deck_windows_uses_tmux_window_id_not_session_index():
-    # Fixture field order: session, window_id, index, active, bell, name.
-    # NOTE: active (field 4) precedes bell (field 5). First two rows have them
-    # swapped in earlier draft; inversion was invisible on the all-zero third row.
+    # Field order (see tmux.DECK_FORMAT for the full note): session,
+    # window_id, index, active, bell, name -- active before bell. Rows 1-2
+    # deliberately have active/bell asymmetric so a swap between the two
+    # would fail this test; the third row is all-zero and can't catch it.
     out = ("mirepoix\t@2\t1\t1\t0\trails\n"
            "mirepoix\t@5\t3\t0\t1\tlogs\n"
            "colorhash\t@9\t1\t0\t0\tlab\n")

@@ -27,7 +27,7 @@ def _ledger_none():
     return {"t": "ledger", "claudes": [], "bells": []}
 
 
-# LineCodec discards lines over 1024 bytes WHOLE -- an uncapped ledger would
+# LineCodec discards lines over 2048 bytes WHOLE -- an uncapped ledger would
 # render fine on a quiet bench and then silently show a STALE ledger on the
 # busiest day (state-shaped protocol: nothing retransmits until the next
 # change), which is exactly when it matters. Field caps live in tmux.py
@@ -37,7 +37,7 @@ def _ledger_none():
 # it fits. Waiting Claudes sort first so the shedding order is least-interesting.
 LEDGER_MAX_CLAUDES = 4
 LEDGER_MAX_BELLS = 6
-LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 1024
+LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 2048
 
 
 def _ledger_msg(claudes, bells):
@@ -410,7 +410,7 @@ class Supervisor:
                 str(c.get("class", ""))[3:]: str(c.get("address", ""))
                 for c in self.state.clients if str(c.get("class", "")).startswith("ws-")
             }
-            wins = hyprland.deck_windows(twins, self.state.clients, self.state.workspaces)
+            wins = hyprland.deck_windows(twins, self.state.clients)
             before = dict(self.deck.slots)
             self.deck.update(wins)
             if self.deck.slots != before:
