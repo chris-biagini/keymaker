@@ -90,7 +90,8 @@ class Supervisor:
         # CTX_POLL_S for the next poll -- a knob that takes a second to respond
         # reads as a broken control. None until the first poll lands.
         self._deck_render_args = None
-        self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
+        self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg,
+                               on_up=self._on_link_up, on_down=self._on_link_down)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
         self._tasks = set()
@@ -119,12 +120,27 @@ class Supervisor:
             self.link.send(m)
         self.link.send(self.ctx)
         self.link.send(self.ledger)
+        # The deck is the switchboard itself: a reconnecting pad (USB reset, a
+        # firmware deploy, the app-menu round trip in framework.py, which also
+        # re-sends `hello`) otherwise starts from its empty default deck and
+        # stays that way until some UNRELATED window opens/closes/renames --
+        # _poll_deck's dedup guard stays silent because the computed message
+        # hasn't changed, even though the pad has never seen it. None only
+        # before the first poll has ever landed; nothing to send yet then.
+        if self.deck_msg is not None:
+            self.link.send(self.deck_msg)
         try:
             _, self.muted = await volume.status()
         except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
         self.link.send(self.coach.state_msg())
+
+    def _on_link_down(self):
+        # Force the next poll to re-emit even if nothing about the windows has
+        # changed -- see _on_link_up's resend above for why a dedup-suppressed
+        # deck otherwise leaves a reconnected pad blank.
+        self.deck_msg = None
 
     async def _on_palette(self, pal):
         self.palette = pal

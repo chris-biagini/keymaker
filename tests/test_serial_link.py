@@ -55,6 +55,25 @@ def test_send_while_down_returns_false():
     assert link.send({"t": "ping"}) is False
 
 
+def test_on_down_fires_when_the_link_drops(pty_pair):
+    master, slave_path = pty_pair
+    downs = []
+
+    async def scenario():
+        link = SerialLink(slave_path, on_msg=lambda m: None,
+                         on_up=lambda: asyncio.sleep(0),
+                         on_down=lambda: downs.append(1))
+        task = asyncio.create_task(link.run())
+        await asyncio.sleep(0.15)
+        assert downs == []
+        os.close(master)          # slave reads EOF -> _drop()
+        await asyncio.sleep(0.15)
+        task.cancel()
+
+    asyncio.run(scenario())
+    assert downs == [1]
+
+
 def test_bad_message_does_not_drop_rest_of_batch(pty_pair):
     master, slave_path = pty_pair
     got, calls = [], {"n": 0}

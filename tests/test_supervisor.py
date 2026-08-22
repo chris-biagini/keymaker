@@ -455,6 +455,45 @@ def test_link_up_snapshot_includes_ledger(monkeypatch, tmp_path):
     assert {"t": "ledger", "claudes": [], "bells": []} in sent
 
 
+def test_link_up_resends_the_deck(tmp_path):
+    # C1: a reconnecting pad (USB reset, firmware deploy, the app-menu round
+    # trip) must not stay stuck on its empty default deck until some
+    # unrelated window event happens to change the computed message.
+    sup = _supervisor(tmp_path)
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+                    "ws": [["mirepoix", "e16000"]],
+                    "slots": [{"i": 0, "c": 0, "n": "1 rails", "s": "live"}],
+                    "map": [1], "bells": []}
+    sent = []
+    sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+
+    asyncio.run(sup._on_link_up())
+
+    decks = [m for m in sent if m.get("t") == "deck"]
+    assert decks == [sup.deck_msg]
+
+
+def test_link_up_before_first_poll_sends_no_deck(tmp_path):
+    sup = _supervisor(tmp_path)
+    sent = []
+    sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+
+    asyncio.run(sup._on_link_up())
+
+    assert not any(m.get("t") == "deck" for m in sent)
+
+
+def test_link_drop_clears_deck_msg_so_the_next_poll_resends(tmp_path):
+    # Even without an explicit resend, a dropped link must force _poll_deck to
+    # re-emit on its next pass rather than staying silent because the computed
+    # message is unchanged from before the drop.
+    sup = _supervisor(tmp_path)
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+                    "ws": [], "slots": [], "map": [0], "bells": []}
+    sup._on_link_down()
+    assert sup.deck_msg is None
+
+
 class TestCoachMessages:
     # NOTE: Config's field defaults (env lookups) evaluate at import time,
     # so tests pass state_dir explicitly — monkeypatching the env after

@@ -8,10 +8,11 @@ import km_proto
 
 
 class SerialLink:
-    def __init__(self, path, on_msg, on_up, reconnect_s=2.0):
+    def __init__(self, path, on_msg, on_up, on_down=None, reconnect_s=2.0):
         self.path = path
         self.on_msg = on_msg
         self.on_up = on_up
+        self.on_down = on_down
         self.reconnect_s = reconnect_s
         self._ser = None
         self._codec = km_proto.LineCodec()
@@ -78,5 +79,10 @@ class SerialLink:
         except (serial.SerialException, OSError):
             pass
         self._ser = None
+        if self.on_down is not None:
+            try:
+                self.on_down()
+            except Exception:
+                logging.exception("keymakerd: on_down failed")
         if self._lost is not None:
             self._lost.set()
