@@ -62,12 +62,15 @@ class Deck:
         top = max(used) + 1 if used else 0
         return max(1, (top + SLOTS_PER_PAGE - 1) // SLOTS_PER_PAGE)
 
-    def message(self, page, knob, colors, focused=None, bells=(), name_max=14):
+    def message(self, page, knob, colors, focused=None, bells=(), name_max=14, ws_max=12):
         """The wire message for one page. See spec section 9.
 
-        Workspaces are sent ONCE by reference and names trimmed: the naive form
-        encodes to 817 bytes against LineCodec's 1024 cap, and an over-long line
-        is DISCARDED, not truncated -- an overflow would silently blank the pad.
+        Workspaces are sent ONCE by reference and names trimmed: workspace names
+        to ws_max (default 12) and window names to name_max (default 14). An
+        over-long line is DISCARDED, not truncated -- an overflow would silently
+        blank the pad. bells is capped at 48 to prevent unbounded growth when many
+        windows are unacked; past 48 simultaneous alerts the minimap is saturated
+        regardless.
         """
         bells = set(bells)
         lo = page * SLOTS_PER_PAGE
@@ -94,9 +97,9 @@ class Deck:
             counts[slot // SLOTS_PER_PAGE] += 1
         return {
             "t": "deck", "page": page, "pages": pages, "knob": knob,
-            "ws": [[n, colors.get(n, "ffffff")] for n in names],
+            "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
             "slots": slots, "map": counts,
-            "bells": sorted(self.slots[w] for w in bells if w in self.slots),
+            "bells": sorted(self.slots[w] for w in bells if w in self.slots)[:48],
         }
 
 

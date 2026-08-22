@@ -107,12 +107,19 @@ def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
 
 
 def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
+    # Workspace dedup saves nothing when every slot has a distinct workspace.
+    # 12 distinct workspace names of 30+ chars + max-length window names + all bells
+    # is the stress case that discovers overflow. A single shared workspace cannot
+    # expose the defect, so do not substitute a simpler version.
     d = km_deck.Deck()
-    d.update([w("tmux:@%d" % i, "mirepoix", "%d a-very-long-window-name" % i)
+    d.update([w("tmux:@%d" % i, "workspace-%d-very-long-name-string" % i,
+                "%d some-long-window-name-here" % i)
               for i in range(12)])
-    m = d.message(page=0, knob="page", colors={"mirepoix": "e16000"},
-                  bells=["tmux:@0"])
-    assert all(len(s["n"]) <= 14 for s in m["slots"])
+    m = d.message(page=0, knob="page",
+                  colors={("workspace-%d-very-long-name-string" % i): "e16000" for i in range(12)},
+                  bells=["tmux:@%d" % i for i in range(12)])
+    # Workspace names are trimmed to ws_max (default 12).
+    assert all(len(ws[0]) <= 12 for ws in m["ws"]), "workspace names must be trimmed"
     encoded = km_proto.encode(m)
     assert len(encoded) < 1024, "deck message would be DISCARDED by LineCodec"
 
