@@ -78,15 +78,15 @@ class Cockpit(App):
         if not self.link.up:
             self.screen.idle_card()
             return
-        badges = ""
-        if self.flags["screencast"]:
-            badges += " REC"
-        if self.flags["muted"]:
-            badges += " MUTE"
-        if self.flags["submap"]:
-            badges += " [" + self.flags["submap"] + "]"
-        ident = "page %d/%d" % (self.deck["page"] + 1, self.deck["pages"])
-        self.screen.set_header(ident + badges)
+        d = self.deck
+        blink = (now // 450) % 2 == 0
+        # len(d["map"]), NOT d["pages"]: km_deck caps `map` at MINIMAP_MAX_PAGES (5)
+        # because only five boxes fit in 128px alongside the counts text, while
+        # `pages` counts every page the KEYS can reach. Passing `pages` would draw
+        # boxes off the right edge of the screen.
+        self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
+        mode = ("PAGE %d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
+        self.screen.set_header("nexus" + " " * (WIDTH_CHARS - 5 - len(mode)) + mode)
         # Attention ledger: what is waiting on you, machine-wide. Blank lines
         # mean all clear -- a glanceable state in itself, and it reads across a
         # locked screen because the pad is a display hyprlock cannot cover.
