@@ -108,20 +108,27 @@ def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
 
 def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
     # Workspace dedup saves nothing when every slot has a distinct workspace.
-    # 12 distinct workspace names of 30+ chars + max-length window names + all bells
-    # is the stress case that discovers overflow. A single shared workspace cannot
-    # expose the defect, so do not substitute a simpler version.
-    d = km_deck.Deck()
-    d.update([w("tmux:@%d" % i, "workspace-%d-very-long-name-string" % i,
-                "%d some-long-window-name-here" % i)
-              for i in range(12)])
-    m = d.message(page=0, knob="page",
-                  colors={("workspace-%d-very-long-name-string" % i): "e16000" for i in range(12)},
-                  bells=["tmux:@%d" % i for i in range(12)])
-    # Workspace names are trimmed to ws_max (default 12).
-    assert all(len(ws[0]) <= 12 for ws in m["ws"]), "workspace names must be trimmed"
-    encoded = km_proto.encode(m)
-    assert len(encoded) < 1024, "deck message would be DISCARDED by LineCodec"
+    # Sweep window counts from 12 to 400 with every window ringing to stress the
+    # wire format. A single-workspace message cannot expose the original defect
+    # (workspace names unbounded), so do not substitute a simpler version.
+    peak_bytes = 0
+    for win_count in [12, 24, 60, 120, 240, 400]:
+        d = km_deck.Deck()
+        windows = [w("tmux:@%d" % i, "workspace-%d-very-long-name-string" % (i % 20),
+                     "%d some-long-window-name-here" % i)
+                   for i in range(win_count)]
+        d.update(windows)
+        m = d.message(page=0, knob="page",
+                      colors={("workspace-%d-very-long-name-string" % i): "e16000" for i in range(20)},
+                      bells=["tmux:@%d" % i for i in range(win_count)])
+        # Workspace names are trimmed to ws_max (default 12).
+        assert all(len(ws[0]) <= 12 for ws in m["ws"]), "workspace names must be trimmed"
+        # Map and bells are bounded by minimap geometry.
+        assert len(m["map"]) <= 5, "map must fit on screen (MINIMAP_MAX_PAGES=5)"
+        assert all(s < 60 for s in m["bells"]), "all bells must be within drawable pages"
+        encoded = km_proto.encode(m)
+        peak_bytes = max(peak_bytes, len(encoded))
+        assert len(encoded) < 2048, "deck message would be DISCARDED by LineCodec"
 
 
 def test_minimap_geometry_lays_pages_out_left_to_right():

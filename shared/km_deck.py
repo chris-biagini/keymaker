@@ -7,6 +7,10 @@ paging changes which twelve are rendered, never which slot anything holds.
 """
 
 SLOTS_PER_PAGE = 12
+MINIMAP_MAX_PAGES = 5  # Five 15px boxes on a 19px pitch span 92px of the 128px
+                       # screen, leaving ~36px for the counts text. A sixth box
+                       # cannot be drawn, so bells/map entries beyond this page
+                       # count are pointless to send.
 
 
 class Deck:
@@ -68,9 +72,9 @@ class Deck:
         Workspaces are sent ONCE by reference and names trimmed: workspace names
         to ws_max (default 12) and window names to name_max (default 14). An
         over-long line is DISCARDED, not truncated -- an overflow would silently
-        blank the pad. bells is capped at 48 to prevent unbounded growth when many
-        windows are unacked; past 48 simultaneous alerts the minimap is saturated
-        regardless.
+        blank the pad. bells and map are bounded to MINIMAP_MAX_PAGES because the
+        OLED screen can only draw that many page boxes; bells on undrawable pages
+        and map entries beyond that point are pointless to send.
         """
         bells = set(bells)
         lo = page * SLOTS_PER_PAGE
@@ -92,14 +96,16 @@ class Deck:
                           "n": meta["n"][:name_max], "s": state})
 
         pages = self.page_count()
-        counts = [0] * pages
+        counts = [0] * min(pages, MINIMAP_MAX_PAGES)
         for slot in by_slot:
-            counts[slot // SLOTS_PER_PAGE] += 1
+            page_idx = slot // SLOTS_PER_PAGE
+            if page_idx < MINIMAP_MAX_PAGES:
+                counts[page_idx] += 1
         return {
             "t": "deck", "page": page, "pages": pages, "knob": knob,
             "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
             "slots": slots, "map": counts,
-            "bells": sorted(self.slots[w] for w in bells if w in self.slots)[:48],
+            "bells": sorted(s for s in (self.slots[w] for w in bells if w in self.slots) if s < MINIMAP_MAX_PAGES * SLOTS_PER_PAGE),
         }
 
 

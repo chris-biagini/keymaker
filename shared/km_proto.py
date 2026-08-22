@@ -7,7 +7,14 @@ def encode(msg):
 
 
 class LineCodec:
-    def __init__(self, max_line=1024):
+    def __init__(self, max_line=2048):
+        # 2048 bytes to accommodate a full twelve-slot deck message. A deck
+        # message encodes to ~1099 bytes in the worst case (12 distinct
+        # workspaces, all bells) because `slots` carries JSON key overhead
+        # {"i":_,"c":_,"n":_,"s":_} twelve times regardless of content. The cap
+        # has to clear the largest legitimate message with room to spare. An
+        # over-long line is DISCARDED, not truncated. RP2040 has 264 KB RAM, so
+        # a 2 KB buffer is not a cost.
         self._buf = bytearray()
         self._max = max_line
         self._overflow = False
