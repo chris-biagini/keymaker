@@ -10,7 +10,7 @@ from pathlib import Path
 from . import hyprland, ledtest, tmux
 from .deck_store import DeckStore
 from .serial_link import SerialLink
-from .theme import ThemeWatcher, resolve_theme_dir
+from .theme import ThemeWatcher
 
 PING_S = 5.0
 DEBOUNCE_S = 0.1
@@ -74,8 +74,6 @@ class Supervisor:
         self.link.send({"t": "hello", "host": "keymakerd", "proto": 1})
         if self.palette:
             self.link.send(self.palette)
-        for m in self.state.snapshot():
-            self.link.send(m)
         # The deck is the switchboard itself: a reconnecting pad (USB reset, a
         # firmware deploy, the app-menu round trip in framework.py, which also
         # re-sends `hello`) otherwise starts from its empty default deck and
@@ -94,21 +92,15 @@ class Supervisor:
         self.deck_msg = None
 
     async def _on_palette(self, pal):
+        # Store and forward, nothing else. This used to probe the theme dir for
+        # Omarchy's light.mode marker and stash the answer on HyprState.light --
+        # whose only reader was a ws_color() parameter documented as ignored, so
+        # the whole light/dark chain moved no pixel. Colorhash's LED surface is a
+        # physical WS2812 rendering with no theme ground to contrast against.
+        # self.palette is kept because _on_link_up re-sends it: a pad that
+        # reconnects mid-session has no palette until the next theme change.
         self.palette = pal
         self.link.send(pal)
-        # Re-resolved here since this callback already fires on every theme change
-        # (ThemeWatcher only calls it when colors.toml's mtime moves). light.mode is
-        # Omarchy's marker file, a sibling of colors.toml in the same theme dir.
-        #
-        # NOTE: since colorhash (2026-08-21) this no longer affects workspace colors —
-        # ws_color reads palette.json's `led` surface, which is a physical WS2812
-        # rendering with no theme ground to contrast against. self.state.light still
-        # drives the rest of the pad's rendering, so the watch stays.
-        theme_dir = resolve_theme_dir(self.cfg.home)
-        light = bool(theme_dir) and (theme_dir / "light.mode").exists()
-        if light != self.state.light:
-            self.state.light = light
-            self._refresh_wanted.set()
 
     # ---- deck -------------------------------------------------------
     def save_deck(self):
@@ -293,8 +285,7 @@ class Supervisor:
                 clients = json.loads(await hyprland.request(self._instance, "j/clients"))
             except (OSError, ValueError):
                 continue
-            for m in self.state.refresh(ws, aw, win, clients):
-                self.link.send(m)
+            self.state.refresh(ws, aw, win, clients)
 
     async def _pinger(self):
         while True:

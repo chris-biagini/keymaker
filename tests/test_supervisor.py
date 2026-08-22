@@ -98,16 +98,17 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
         os.write(master, km_proto.encode({"t": "key", "n": 0, "act": "hold"}))
         await asyncio.sleep(0.3)
         task.cancel()
-        return msgs, hypr.dispatched
+        return msgs, hypr.dispatched, sup.state.active
 
-    msgs, dispatched = asyncio.run(scenario())
+    msgs, dispatched, active = asyncio.run(scenario())
     types = [m["t"] for m in msgs]
-    for expected in ("hello", "ws", "flags"):
+    for expected in ("hello", "flags"):
         assert expected in types
-    # The link-up snapshot goes out before the first Hyprland refresh, so the
-    # FIRST ws msg is the default state; the refreshed one arrives last.
-    ws = [m for m in msgs if m["t"] == "ws"][-1]
-    assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": [], "colors": {}, "names": {}}
+    # Workspace state is daemon-internal: it resolves focus and prunes bells, and
+    # reaches the pad only folded into the deck. Nothing on the wire describes a
+    # workspace on its own.
+    assert "ws" not in types
+    assert active == 3
     assert not any(d.startswith("dispatch workspace") for d in dispatched)
     assert not any(d.startswith("dispatch movetoworkspacesilent") for d in dispatched)
 
