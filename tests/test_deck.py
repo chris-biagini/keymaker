@@ -90,48 +90,42 @@ def test_message_carries_only_the_current_page_with_ws_by_reference():
     # Caller order is preserved (km_deck no longer sorts), so "mirepoix" --
     # listed first -- claims slot 0 and is the first ws entry.
     d.update([w("tmux:@1", "mirepoix", "1 rails"), w("tmux:@2", "colorhash", "1 lab")])
-    m = d.message(page=0, knob="page", colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
+    m = d.message(page=0, colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
     assert m["t"] == "deck"
     assert m["ws"] == [["mirepoix", "e16000"], ["colorhash", "6d0a9e"]]
     assert m["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "live"},
                           {"i": 1, "c": 1, "n": "1 lab", "s": "live"}]
-    assert m["pages"] == 1 and m["page"] == 0 and m["knob"] == "page"
+    assert m["pages"] == 1 and m["page"] == 0
+
+
+def test_message_no_longer_carries_a_knob_mode():
+    # The knob has exactly one mode now (paging), so a mode field on the wire
+    # would be a constant the pad has to branch on for no reason.
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a", "n": "1 sh"}])
+    msg = d.message(0, {"a": "ff0000"})
+    assert "knob" not in msg
 
 
 def test_message_marks_focused_bell_and_ghost_states():
     d = km_deck.Deck()
     d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2"), w("tmux:@3", "a", "3")])
     d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])   # @3 ghosts at slot 2
-    m = d.message(page=0, knob="vol", colors={"a": "ffffff"},
+    m = d.message(page=0, colors={"a": "ffffff"},
                   focused="tmux:@1", bells=["tmux:@2"])
     states = {s["i"]: s["s"] for s in m["slots"]}
     assert states == {0: "focused", 1: "bell", 2: "ghost"}
 
 
-def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
+def test_bells_still_mark_slot_state_though_the_map_field_is_gone():
+    # bells stays a PARAMETER of message() -- it still drives each slot's own
+    # "s" field, which is how the legend renders bell state. Only the old
+    # "map"/"bells" OUTPUT fields (spec 7.1) are gone.
     d = km_deck.Deck()
     d.update([w("tmux:@%d" % i, "a", "%02d" % i) for i in range(20)])
-    m = d.message(page=0, knob="page", colors={"a": "ffffff"}, bells=["tmux:@15"])
-    assert m["bells"] == [15]                  # slot 15 lives on page 1, not shown
+    m = d.message(page=0, colors={"a": "ffffff"}, bells=["tmux:@15"])
+    assert "map" not in m and "bells" not in m
     assert all(s["i"] < 12 for s in m["slots"])
-    # `map` is a per-page BITMASK, not a count: page 0 has all 12 slots
-    # occupied (bits 0-11 set), page 1 has slots 0-7 of its own range occupied.
-    assert m["map"] == [0xFFF, 0xFF]
-
-
-def test_map_is_a_bitmask_not_a_count_so_sparse_pages_agree_with_bells():
-    # I3: a count drew the first N cells of a page while bells draw at the
-    # slot's ACTUAL position -- disagreeing whenever occupied slots aren't a
-    # contiguous run from 0, which is routine (a slot restored at a high
-    # number, a dismissed mid-page ghost). Slots 0 and 7 occupied, matching
-    # the finding's own example: a count-based map would show TWO filled
-    # cells at positions 0 and 1 -- neither of which is slot 7, where the
-    # bell actually lives.
-    d = km_deck.Deck({"tmux:@1": 0, "tmux:@2": 7})
-    d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])
-    m = d.message(page=0, knob="vol", colors={"a": "ffffff"}, bells=["tmux:@2"])
-    assert m["map"] == [0b10000001]             # bits 0 and 7 set, nothing between
-    assert m["bells"] == [7]
 
 
 def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
@@ -146,95 +140,150 @@ def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
                      "%d some-long-window-name-here" % i)
                    for i in range(win_count)]
         d.update(windows)
-        m = d.message(page=0, knob="page",
+        m = d.message(page=0,
                       colors={("workspace-%d-very-long-name-string" % i): "e16000" for i in range(20)},
                       bells=["tmux:@%d" % i for i in range(win_count)])
         # Workspace names are trimmed to ws_max (default 12).
         assert all(len(ws[0]) <= 12 for ws in m["ws"]), "workspace names must be trimmed"
-        # Map and bells are bounded by minimap geometry. `map` is a per-page
-        # bitmask (12 bits) now, not a count -- still at most 4 decimal digits
-        # (0-4095) on the wire, so it does not regress the size this test
-        # exists to guard.
-        assert len(m["map"]) <= 5, "map must fit on screen (MINIMAP_MAX_PAGES=5)"
-        assert all(0 <= mv <= 0xFFF for mv in m["map"]), "map entries are 12-bit masks"
-        assert all(s < 60 for s in m["bells"]), "all bells must be within drawable pages"
         encoded = km_proto.encode(m)
         peak_bytes = max(peak_bytes, len(encoded))
         assert len(encoded) < 2048, "deck message would be DISCARDED by LineCodec"
 
 
-def test_minimap_geometry_lays_pages_out_left_to_right():
-    boxes = km_deck.minimap_boxes(3)
-    assert boxes == [(1, 38, 15, 20), (20, 38, 15, 20), (39, 38, 15, 20)]
-    assert km_deck.minimap_cell(0, boxes[0]) == (3, 41)
-    assert km_deck.minimap_cell(4, boxes[0]) == (7, 45)      # row 1, col 1
-    assert km_deck.minimap_cell(12, boxes[1]) == (22, 41)    # slot 12 -> page 1, key 0
+def test_cell_label_is_always_exactly_six_characters():
+    # The legend row packs three cells at a fixed 7-character pitch; a label of
+    # any other length shifts every column to its right.
+    for ws, name in [("mirepoix", "2 recipe-page-redesign"), ("a", "x"),
+                     ("", ""), ("colorhash", "1 color-hash")]:
+        assert len(km_deck.cell_label(ws, name)) == 6
 
 
-def test_minimap_pixels_is_empty_when_there_are_no_pages():
-    # idle_card clears the strip through this path; it must produce a frame the
-    # diff painter can subtract down to a blank bitmap.
-    assert km_deck.minimap_pixels(0, 0, (), (), False) == set()
+def test_cell_label_keeps_the_tmux_index_as_a_disambiguator():
+    # Window names arrive as "<index> <name>", and the index is the most
+    # distinguishing thing about two windows in the same session.
+    assert km_deck.cell_label("mirepoix", "2 recipe-page") == "mir:2r"
+    assert km_deck.cell_label("mirepoix", "3 alias-bug") == "mir:3a"
 
 
-def test_minimap_pixels_outlines_only_the_page_on_the_keys():
-    lit = km_deck.minimap_pixels(3, 1, (0, 0, 0), (), False)
-    for p, (x, y, w, h) in enumerate(km_deck.minimap_boxes(3, y=0)):
-        assert ((x, y) in lit) is (p == 1), "page %d outline wrong" % p
+def test_cell_label_pads_a_short_session_rather_than_shifting_columns():
+    assert km_deck.cell_label("a", "1 sh") == "a  :1s"
 
 
-def test_minimap_pixels_draws_a_cell_only_where_the_mask_claims_one():
-    lit = km_deck.minimap_pixels(1, 0, (0b101,), (), False)   # bits 0 and 2
-    box = km_deck.minimap_boxes(1, y=0)[0]
-    assert km_deck.minimap_cell(0, box) in lit
-    assert km_deck.minimap_cell(2, box) in lit
-    assert km_deck.minimap_cell(1, box) not in lit
+def test_legend_row_is_twenty_characters_with_gaps_at_6_and_13():
+    labels = ["ab" + str(i) + "de" + str(i) for i in range(12)]
+    row = km_deck.legend_row(labels, 1)
+    assert len(row) == 20
+    assert row[6] == " " and row[13] == " "
+    assert row[0:6] == labels[3] and row[7:13] == labels[4] and row[14:20] == labels[5]
 
 
-def test_minimap_pixels_bells_only_light_on_the_blink_phase():
-    box = km_deck.minimap_boxes(1, y=0)[0]
-    cx, cy = km_deck.minimap_cell(5, box)
-    on = km_deck.minimap_pixels(1, 0, (0,), (5,), True)
-    off = km_deck.minimap_pixels(1, 0, (0,), (5,), False)
-    # 3x3 for a bell vs 2x2 for a plain cell: the far corner is bell-only.
-    assert (cx + 2, cy + 2) in on
-    assert (cx + 2, cy + 2) not in off
+def test_legend_row_renders_missing_slots_as_blanks():
+    row = km_deck.legend_row(["abcdef"], 0)
+    assert row == "abcdef" + " " * 14
 
 
-def test_minimap_pixels_ignores_bells_on_pages_it_cannot_draw():
-    # The keys reach every page; the strip only draws MINIMAP_MAX_PAGES. A bell
-    # past the drawable range must not be painted onto some other page's box.
-    # (page 0 is on the keys, so its outline is lit either way -- the claim is
-    # that the undrawable bell adds nothing, not that the frame is blank.)
-    assert (km_deck.minimap_pixels(1, 0, (0,), (99,), True)
-            == km_deck.minimap_pixels(1, 0, (0,), (), True))
+def test_gutter_pixels_empty_state_lights_nothing():
+    assert km_deck.gutter_pixels(["empty"] * 12, True) == set()
 
 
-def test_minimap_pixels_matches_a_reference_clear_then_repaint():
-    # The diff painter is only correct if the frame it computes equals what the
-    # old fill(0)-then-draw produced. That old routine, reproduced as an oracle.
-    pages, page, masks, bells, blink = 3, 1, (0b1011, 0b1, 0), (13,), True
-    ref = set()
-    boxes = km_deck.minimap_boxes(pages, y=0)
-    for p, (x, y, w, h) in enumerate(boxes):
-        if p == page:
-            for dx in range(w):
-                ref.add((x + dx, y))
-                ref.add((x + dx, y + h - 1))
-            for dy in range(h):
-                ref.add((x, y + dy))
-                ref.add((x + w - 1, y + dy))
-        mask = masks[p] if p < len(masks) else 0
-        for i in range(km_deck.SLOTS_PER_PAGE):
-            if not mask >> i & 1:
-                continue
-            cx, cy = km_deck.minimap_cell(p * km_deck.SLOTS_PER_PAGE + i, (x, y, w, h))
-            for dx in range(2):
-                for dy in range(2):
-                    ref.add((cx + dx, cy + dy))
-    for gslot in bells:
-        cx, cy = km_deck.minimap_cell(gslot, boxes[gslot // km_deck.SLOTS_PER_PAGE])
-        for dx in range(3):
-            for dy in range(3):
-                ref.add((cx + dx, cy + dy))
-    assert km_deck.minimap_pixels(pages, page, masks, bells, blink) == ref
+def test_gutter_pixels_live_is_a_single_column():
+    lit = km_deck.gutter_pixels(["live"] + ["empty"] * 11, True)
+    assert lit == {(1, y) for y in range(9)}
+
+
+def test_gutter_pixels_ghost_is_a_dotted_column():
+    lit = km_deck.gutter_pixels(["ghost"] + ["empty"] * 11, True)
+    assert lit == {(1, y) for y in range(0, 9, 2)}
+
+
+def test_gutter_pixels_focused_is_hollow_and_bell_is_solid():
+    hollow = km_deck.gutter_pixels(["focused"] + ["empty"] * 11, True)
+    solid = km_deck.gutter_pixels(["bell"] + ["empty"] * 11, True)
+    assert len(solid) == 4 * 9
+    assert hollow < solid            # a proper subset: outline inside the block
+    assert (2, 4) in solid and (2, 4) not in hollow
+
+
+def test_gutter_pixels_bell_goes_dark_on_the_off_phase():
+    assert km_deck.gutter_pixels(["bell"] + ["empty"] * 11, False) == set()
+
+
+def test_gutter_pixels_places_each_slot_in_the_key_grid():
+    # Slot i lives at row i//3, column i%3 -- the MacroPad's physical layout.
+    lit = km_deck.gutter_pixels(["empty"] * 4 + ["live"] + ["empty"] * 7, True)
+    assert lit == {(1 + 42, y) for y in range(10, 19)}
+
+
+def test_countdown_text_boundaries():
+    assert km_deck.countdown_text(0) is None
+    assert km_deck.countdown_text(499) is None
+    assert km_deck.countdown_text(500) == "RE-KEY IN 3"
+    assert km_deck.countdown_text(1499) == "RE-KEY IN 3"
+    assert km_deck.countdown_text(1500) == "RE-KEY IN 2"
+    assert km_deck.countdown_text(2500) == "RE-KEY IN 1"
+    assert km_deck.countdown_text(3499) == "RE-KEY IN 1"
+    assert km_deck.countdown_text(3500) == "RE-KEYING"
+
+
+def test_message_carries_the_focused_window_even_when_it_is_off_page():
+    # The focused window is exactly what you want named while you are paging
+    # AWAY from it, so this cannot be derived pad-side from `slots`.
+    d = km_deck.Deck()
+    wins = [{"id": "tmux:@%d" % i, "ws": "ws%d" % i, "n": "%d w" % i}
+            for i in range(14)]
+    d.update(wins)
+    msg = d.message(0, {}, focused="tmux:@13")
+    assert msg["focus"] == "ws13 13 w"
+    assert len(msg["slots"]) == 12                   # page 0 only; @13 is on page 1
+
+
+def test_message_focus_is_blank_when_nothing_is_focused():
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a", "n": "1 sh"}])
+    assert d.message(0, {})["focus"] == ""
+
+
+def test_message_focus_is_trimmed_to_forty_not_the_screen_width():
+    # FOCUS_MAX is 40, not the 21-column screen width -- trimming to the
+    # screen width would make km_text.marquee's scroll (spec 5.2) unreachable,
+    # since marquee returns early whenever the text already fits the display.
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a" * 30, "n": "1 " + "b" * 30}])
+    focus = d.message(0, {}, focused="tmux:@1")["focus"]
+    assert len(focus) > 21          # longer than the screen: marquee has work to do
+    assert len(focus) <= 40
+
+
+def test_message_focus_is_blank_when_focused_window_is_unknown():
+    # .get() handles a focused id that names no known window; nothing pinned
+    # this before.
+    d = km_deck.Deck()
+    assert d.message(0, {}, focused="tmux:@99")["focus"] == ""
+
+
+def test_message_reports_the_total_window_count_across_all_pages():
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@%d" % i, "ws": "a", "n": "%d w" % i} for i in range(14)])
+    assert d.message(0, {})["total"] == 14
+
+
+def test_message_worst_case_wire_size_is_under_the_codec_cap():
+    # The true worst case for one page: TWELVE DISTINCT workspaces, not one
+    # repeated -- workspaces are sent once by reference (the `ws` list), so a
+    # single repeated workspace is actually the BEST case. Every window rings
+    # and one is focused, since both add bytes. This settles a real
+    # disagreement between three prior estimates (km_proto.py's ~1099,
+    # spec 7.1's ~1028, a hand measurement's 1001) with an actual measurement.
+    # LineCodec discards an over-long line WHOLE (silently blanking the pad),
+    # so this cap is worth a real test rather than another guess.
+    d = km_deck.Deck()
+    windows = [{"id": "tmux:@%d" % i,
+                "ws": "workspace-%d-very-long-name-string" % i,
+                "n": "%d some-long-window-name-here" % i}
+               for i in range(12)]
+    d.update(windows)
+    colors = {win["ws"]: "e16000" for win in windows}
+    m = d.message(page=0, colors=colors, focused="tmux:@0",
+                  bells=[win["id"] for win in windows])
+    encoded = km_proto.encode(m)
+    assert len(encoded) < 2048

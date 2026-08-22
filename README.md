@@ -3,56 +3,32 @@
 CircuitPython firmware and a small host daemon that turn an
 [Adafruit MacroPad RP2040](https://www.adafruit.com/product/5128) into a desk
 companion for an [Omarchy](https://omarchy.org) / Hyprland desktop: a physical
-workspace deck on one side, a finger-drumming trainer on the other, both
-dressed in whatever Omarchy theme is active.
+switchboard of open terminal windows, dressed in whatever Omarchy theme is
+active.
 
 Named for the Matrix's Keymaker: a pad of keys that opens doors.
 
 ## What it does
 
-Two apps in v1, switched from an on-device menu (long-press the knob):
+A single app: **Cockpit**, the switchboard.
 
-### Cockpit
+The 3×4 key grid is a set of twelve sticky slots, one per open terminal
+window across every Hyprland workspace, paged with the knob when there are
+more than twelve. A window keeps its slot for life — sticky allocation means
+nothing another window does can move it — so keys don't reshuffle underfoot.
+Hold the encoder for 3.5 s to re-key the board from scratch.
 
-The 3×4 key grid is a split deck: the top two rows are Hyprland workspaces
-1–6, the bottom two rows are the tmux windows of whichever footguard session
-is currently focused.
-
-- Top half: per-key color shows state — active, occupied, urgent — in the
-  current Omarchy theme's identity palette. Tap a key to jump to that
-  workspace; hold it to move the focused window there.
-- Bottom half: live when a `footguard-*` window has focus, dark otherwise.
-  Each key is index-colored to match its window (same palette as the tmux
-  status bar), tapping switches windows, and a bell in an inactive window
-  blinks its key. Hold is reserved for future use.
-- The OLED header shows the active workspace inverted (`3 · macropad`, or
-  its ASCII fallback), plus REC/MUTE/submap badges. Below it: a window
-  legend (index, name, bell flag) while a footguard session is focused, or
-  the focused window's title as a marquee otherwise.
-- Top-half urgency runs BEL → tmux → foot → Hyprland → pad, entirely
-  in-band, so it works the same over mosh as it does locally; bottom-half
-  bells are read straight off tmux's own window bell flag by the daemon's
-  1 Hz poll, no foot/Hyprland hop required.
-- The knob is a volume knob (click to mute). It was always going to be a
-  volume knob.
-
-### Coach
-
-A rhythm trainer for learning finger drumming, built around the pad's one
-honest limitation. Stages progress from a bare metronome through backbeats,
-full-kit grooves, and swing, to deliberately playing off the grid — that last
-stage scored on the *consistency* of your chosen lateness, not your distance
-from the click.
-
-- Hits are timestamped and scored on the RP2040 itself (no USB or scheduler
-  jitter): green within ±35 ms, amber for dragging, red for rushing.
-- Stages unlock as accuracy improves; practice history persists on the host.
-- Drum sounds play through the built-in speaker, and every hit is also sent
-  as native USB MIDI (General MIDI drums, channel 10) — a DAW sees the pad
-  exactly like any pad controller.
-- The switches are on/off; velocity cannot be taught here. When your timing
-  is steady enough that velocity is what's missing, the pad says so and
-  retires as your trainer. The Akai awaits.
+- Each key is color-identified to its workspace (same palette as the tmux
+  status bar). Tap a key to jump to that window.
+- The OLED shows a four-row, twelve-cell legend naming every slot on the
+  current page (`sss:nn` — session + window), with a per-cell state gutter
+  (live, ghost, focused, bell) drawn as shape rather than color, since a
+  1-bit panel has no hue or brightness to spare. The header shows the host,
+  page, and window count; the row below it names whichever window is
+  currently focused, scrolling if it doesn't fit.
+- Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
+  works the same over mosh as it does locally.
+- The knob only pages — there is no other mode, and no on-device app menu.
 
 ### Theme following
 
@@ -66,20 +42,19 @@ stable across Omarchy 3.x and 4.x.
 Two programs, one protocol, each side optional to the other:
 
 - **Firmware** (CircuitPython 10.x + `adafruit_macropad`) owns everything
-  latency-critical or standalone: coach timing and scoring, sound, MIDI,
-  drawing, LEDs, app switching. Unplug the daemon and Coach still works;
-  Cockpit shows a quiet idle card instead of pretending.
+  latency-critical or standalone: drawing, LEDs, key handling. Unplug the
+  daemon and the pad shows a quiet idle card instead of pretending.
 - **Daemon** (`keymakerd`, Python ≥3.11, stdlib + pyserial) owns everything
   host-shaped: Hyprland state in and actuation out (via Hyprland's IPC
-  sockets — no synthetic keystrokes), volume via `wpctl`, the Omarchy
-  palette, and practice-history persistence.
+  sockets — no synthetic keystrokes), tmux window state, deck slot
+  persistence, and the Omarchy palette.
 - **Link**: JSON-lines over the `usb_cdc` data channel (the second CDC
   serial interface; the REPL stays free on the first). The protocol carries
   state, not commands, and the daemon re-sends a full snapshot on every
   connect — so restarts, firmware reloads, and replugs all self-heal.
 
-Design details, protocol table, and the Coach curriculum live in
-[docs/specs/2026-08-15-keymaker-design.md](docs/specs/2026-08-15-keymaker-design.md).
+Design details and the wire protocol table live in
+[docs/specs/2026-08-22-switchboard-operator-design.md](docs/specs/2026-08-22-switchboard-operator-design.md).
 
 ## Requirements
 

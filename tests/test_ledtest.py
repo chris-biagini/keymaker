@@ -132,7 +132,7 @@ def test_watch_survives_bad_spool_and_recovers(tmp_path, capsys):
 
 
 def test_watch_survives_missing_spool_dir(tmp_path):
-    # state_dir may not exist yet (only CoachStore creates it, lazily).
+    # state_dir may not exist yet (DeckStore.save creates it, lazily).
     spool = tmp_path / "nope" / "ledtest.json"
 
     async def run():

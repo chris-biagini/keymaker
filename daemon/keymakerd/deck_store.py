@@ -1,4 +1,4 @@
-"""Persist the deck's {window_id: slot} map. Mirrors coach_store.py's discipline:
+"""Persist the deck's {window_id: slot} map. Same discipline throughout:
 never raise, atomic replace, validate on load.
 
 Without this a `systemctl --user restart keymaker` reshuffles every key, which

@@ -1,15 +1,13 @@
-"""keymakerd: supervises serial link, Hyprland stream, theme watcher, volume."""
+"""keymakerd: supervises serial link, Hyprland stream, theme watcher."""
 import asyncio
 import json
 import os
 
 import km_deck
-import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import hyprland, ledtest, tmux, volume
-from .coach_store import CoachStore
+from . import hyprland, ledtest, tmux
 from .deck_store import DeckStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher, resolve_theme_dir
@@ -17,42 +15,6 @@ from .theme import ThemeWatcher, resolve_theme_dir
 PING_S = 5.0
 DEBOUNCE_S = 0.1
 CTX_POLL_S = 1.0
-
-
-def _ctx_none():
-    return {"t": "ctx", "mode": "none", "session": None, "items": [], "addr": None}
-
-
-def _ledger_none():
-    return {"t": "ledger", "claudes": [], "bells": []}
-
-
-# LineCodec discards lines over 2048 bytes WHOLE -- an uncapped ledger would
-# render fine on a quiet bench and then silently show a STALE ledger on the
-# busiest day (state-shaped protocol: nothing retransmits until the next
-# change), which is exactly when it matters. Field caps live in tmux.py
-# (_TITLE_MAX/_SESSION_MAX); count caps here; and because JSON escaping can
-# still inflate quote-heavy titles (review 2026-08-16 measured 1313 B worst
-# case pre-fix), the encoded size is CHECKED, shedding busy-last entries until
-# it fits. Waiting Claudes sort first so the shedding order is least-interesting.
-LEDGER_MAX_CLAUDES = 4
-LEDGER_MAX_BELLS = 6
-LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 2048
-
-
-def _ledger_msg(claudes, bells):
-    claudes = sorted(claudes, key=lambda c: c["busy"])[:LEDGER_MAX_CLAUDES]
-    bells = bells[:LEDGER_MAX_BELLS]
-    while True:
-        msg = {"t": "ledger", "claudes": claudes, "bells": bells}
-        if len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES:
-            return msg
-        if claudes:
-            claudes = claudes[:-1]
-        elif bells:
-            bells = bells[:-1]
-        else:
-            return msg
 
 
 @dataclass
@@ -68,14 +30,9 @@ class Supervisor:
     def __init__(self, cfg):
         self.cfg = cfg
         self.state = hyprland.HyprState()
-        self.muted = False
         self.palette = None
-        self.ctx = _ctx_none()
-        self.ledger = _ledger_none()
-        self.coach = CoachStore(cfg.state_dir / "coach.json")
         self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
         self.deck = km_deck.Deck(self.deck_store.load())
-        self.knob_mode = "vol"      # short-press toggles; rotation is volume first
         self.deck_page = 0
         self.deck_msg = None
         # Cache of the deck poll's tmux windows, keyed by id ("tmux:@N"), and of
@@ -84,6 +41,7 @@ class Supervisor:
         # them. Empty until the first deck poll lands, so an early tap is a no-op
         # rather than a KeyError.
         self._deck_twins = {}
+        self._deck_wins = []
         self._deck_ws_addr = {}
         # Last (colors, focused, bells) _poll_deck computed, so a knob gesture can
         # re-render the deck message SYNCHRONOUSLY instead of waiting up to
@@ -110,7 +68,7 @@ class Supervisor:
     # ---- outbound -------------------------------------------------
     def _flags_msg(self):
         return {"t": "flags", "submap": self.state.submap,
-                "screencast": self.state.screencast, "muted": self.muted}
+                "screencast": self.state.screencast}
 
     async def _on_link_up(self):
         self.link.send({"t": "hello", "host": "keymakerd", "proto": 1})
@@ -118,8 +76,6 @@ class Supervisor:
             self.link.send(self.palette)
         for m in self.state.snapshot():
             self.link.send(m)
-        self.link.send(self.ctx)
-        self.link.send(self.ledger)
         # The deck is the switchboard itself: a reconnecting pad (USB reset, a
         # firmware deploy, the app-menu round trip in framework.py, which also
         # re-sends `hello`) otherwise starts from its empty default deck and
@@ -129,12 +85,7 @@ class Supervisor:
         # before the first poll has ever landed; nothing to send yet then.
         if self.deck_msg is not None:
             self.link.send(self.deck_msg)
-        try:
-            _, self.muted = await volume.status()
-        except (OSError, ValueError, IndexError):
-            pass
         self.link.send(self._flags_msg())
-        self.link.send(self.coach.state_msg())
 
     def _on_link_down(self):
         # Force the next poll to re-emit even if nothing about the windows has
@@ -167,7 +118,7 @@ class Supervisor:
         # Clamp rather than trust: windows closing can shrink the page count out
         # from under a page the knob already selected.
         self.deck_page = min(self.deck_page, self.deck.page_count() - 1)
-        return self.deck.message(self.deck_page, self.knob_mode, colors,
+        return self.deck.message(self.deck_page, colors,
                                  focused=focused, bells=bells)
 
     def _resend_deck(self):
@@ -185,13 +136,29 @@ class Supervisor:
             self.deck_msg = msg
             self.link.send(msg)
 
-    def on_knob_press(self):
-        self.knob_mode = "page" if self.knob_mode == "vol" else "vol"
+    def on_rekey(self):
+        """Drop every slot assignment and re-derive from workspace order.
+
+        Ghosts go too: a re-key is a fresh board, and a completion marker kept
+        against a slot that no longer means the same thing is worse than a lost
+        one. No service restart -- clearing deck-slots.json by hand and bouncing
+        the unit was only ever a way to reach this state.
+
+        A no-op before the first poll has landed: self._deck_wins would be []
+        (mirrors _resend_deck's own guard on _deck_render_args), and updating
+        against an empty window list would wipe every slot restored from disk
+        AND persist that empty board to deck-slots.json -- destroying it, not
+        just displaying it wrong until the next poll.
+        """
+        if not self._deck_wins:
+            return
+        self.deck.slots = {}
+        self.deck.ghosts = {}
+        self.deck.update(self._deck_wins)
+        self.save_deck()
         self._resend_deck()
 
     def on_knob_turn(self, delta):
-        if self.knob_mode != "page":
-            return                      # volume is handled by the existing path
         pages = self.deck.page_count()
         self.deck_page = (self.deck_page + delta + pages) % pages
         self._resend_deck()
@@ -264,15 +231,9 @@ class Supervisor:
             if msg.get("act") == "tap":                   # hold is reserved: no-op
                 self._spawn(self._on_tap(n), "deck-tap")
         elif t == "dial":
-            d = int(msg.get("d", 0))
-            if self.knob_mode == "page":
-                self.on_knob_turn(d)
-            else:
-                self._spawn(self._volume(d, False), "volume")
-        elif t == "click":
-            self.on_knob_press()
-        elif t == "coach":
-            self._spawn(self._coach_session(msg.get("session")), "coach")
+            self.on_knob_turn(int(msg.get("d", 0)))
+        elif t == "rekey":
+            self.on_rekey()
 
     async def _dispatch(self, cmd):
         # Swallow transient IPC failures WITHOUT clearing _instance:
@@ -289,26 +250,6 @@ class Supervisor:
     # `_activate_window` (the old ctx-based bottom-half tap handler) is retired:
     # `_focus_deck_window` below does the same job -- focus the client, then
     # select-window -- against deck slots instead of ctx's fixed 6-11 range.
-
-    async def _volume(self, direction, toggle):
-        try:
-            if toggle:
-                await volume.toggle_mute()
-            elif direction:
-                await volume.step(direction)
-            _, self.muted = await volume.status()
-        except (OSError, ValueError, IndexError):
-            pass
-        self.link.send(self._flags_msg())
-
-    async def _coach_session(self, session):
-        if not isinstance(session, dict):
-            return
-        try:
-            self.coach.append(session)
-        except Exception as e:
-            print(f"keymakerd: coach store failed: {e!r}", flush=True)
-        self.link.send(self.coach.state_msg())
 
     # ---- hyprland side --------------------------------------------
     async def _hypr_events(self):
@@ -360,38 +301,10 @@ class Supervisor:
             await asyncio.sleep(PING_S)
             self.link.send({"t": "ping"})
 
-    async def _context(self):
-        # `ctx` here is the OLD split-deck context message, superseded by `deck`
-        # (see docs/superpowers/specs/2026-08-22-macropad-switchboard-design.md).
-        # Left running rather than deleted: cockpit.py (Task 9) hasn't switched to
-        # `deck` rendering yet, and untangling this from `_poll_ledger` below is a
-        # separate cleanup once nothing consumes it, not this task's job.
+    async def _poll_loop(self):
         while True:
             await asyncio.sleep(CTX_POLL_S)
-            client = self.state.fg.get(self.state.active)
-            new = _ctx_none()
-            if client is not None:
-                candidates = [client["cls"].removeprefix("ws-")]
-                label = self.state.names.get(str(self.state.active))
-                if label:
-                    fallback = hyprland.session_name(label)
-                    if fallback and fallback not in candidates:
-                        candidates.append(fallback)
-                try:
-                    for session in candidates:
-                        items = await tmux.list_windows(session)
-                        if items is not None:
-                            new = {"t": "ctx", "mode": "tmux", "session": session,
-                                   "items": [w for w in items if 1 <= w["i"] <= 6],
-                                   "addr": client["addr"]}
-                            break
-                except Exception as e:
-                    print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
-            if new != self.ctx:
-                self.ctx = new
-                self.link.send(new)
             await self._poll_deck()
-            await self._poll_ledger()
 
     async def _poll_deck(self):
         try:
@@ -411,6 +324,7 @@ class Supervisor:
                 for c in self.state.clients if str(c.get("class", "")).startswith("ws-")
             }
             wins = hyprland.deck_windows(twins, self.state.clients)
+            self._deck_wins = wins
             before = dict(self.deck.slots)
             self.deck.update(wins)
             if self.deck.slots != before:
@@ -426,21 +340,6 @@ class Supervisor:
         except Exception as e:
             print(f"keymakerd: deck poll failed: {e!r}", flush=True)
 
-    async def _poll_ledger(self):
-        # Global on purpose -- the ledger is the "what's waiting on me" surface
-        # and must keep reporting while focus (or the whole screen, via hyprlock)
-        # is elsewhere. The pad is a display hyprlock has no jurisdiction over.
-        try:
-            bells = await tmux.list_bells()
-            claudes = await tmux.list_claude_panes()
-        except Exception as e:
-            print(f"keymakerd: ledger poll failed: {e!r}", flush=True)
-            return
-        new = _ledger_msg(claudes or [], bells or [])
-        if new != self.ledger:
-            self.ledger = new
-            self.link.send(new)
-
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)
         # ledtest: spike-grade debug bridge for palette eyeballing. Always via
@@ -448,7 +347,7 @@ class Supervisor:
         # watcher idles harmlessly when the spool never appears.
         await asyncio.gather(self.link.run(), self._hypr_events(),
                              self._refresher(), self._pinger(),
-                             self._context(), theme.run(),
+                             self._poll_loop(), theme.run(),
                              ledtest.watch(str(self.cfg.state_dir / "ledtest.json"),
                                            self.link.send))
 

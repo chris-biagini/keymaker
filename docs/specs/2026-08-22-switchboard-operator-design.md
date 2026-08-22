@@ -40,8 +40,10 @@ form of the project's standing rule that hue is never the only channel.
 | Coach | `firmware/apps/coach.py`, `shared/km_coach.py`, `daemon/keymakerd/coach_store.py`, `tools/make_drums.py`, `tests/test_coach.py`, `tests/test_coach_store.py`, `tests/test_drums.py` |
 | Audio | `firmware/pad/audio.py`, `tests/test_audio.py` |
 
-Any generated drum sample assets on the CIRCUITPY volume are removed by the next
-firmware deploy; they are not tracked in the repo.
+The drum samples at `firmware/sounds/*.wav` (`click_hi`, `click_lo`, `hat`,
+`kick`, `snare`) go too. An earlier draft of this spec claimed they were untracked
+build products; they are in fact committed, and nothing reads them once
+`pad/audio.py` and `apps/coach.py` are gone.
 
 ### 3.2 Code deleted
 
@@ -61,8 +63,12 @@ firmware deploy; they are not tracked in the repo.
 
 **`daemon/keymakerd/hyprland.py`**
 
-- `win_msg` (`{"t": "win", ...}`) — never sent; the focused window now travels in
-  `deck` (§7.1)
+- `_win_msg` (`{"t": "win", ...}`) and the `HyprState.cls` / `.title` attributes that
+  feed it. An earlier draft of this spec claimed it was never sent; that was wrong —
+  it ships on every refresh and snapshot. It is retired because nothing consumes it:
+  `cockpit.py` stored `self.win` and never read it, and the focused window now travels
+  in `deck` (§7.1). `HyprState.fg[ws]["cls"]` is a different attribute and stays —
+  `_focused_window_id` depends on it.
 
 **`shared/km_palette.py`**
 
@@ -125,6 +131,15 @@ figures below are the resulting pixel rows.
 | 53–61 | Legend row 3 | `Label` |
 | 23–61 | State gutters | `Bitmap` (128 × 39 at y=23) |
 
+**The gutter bitmap shares its rows with the legend labels, so layering is
+load-bearing.** `displayio` draws a `Group`'s children in append order, later on
+top, and a `Palette` entry is opaque unless explicitly made transparent. The
+TileGrid must therefore be appended **before** the labels, and palette index 0
+must be `make_transparent(0)`. Get either wrong and a 128 × 39 opaque black
+rectangle paints over all four legend rows — the layout's entire content. The
+previous layout was immune to this by accident: its 94 × 22 bitmap at y=40 sat
+clear of every label, so opacity never mattered.
+
 Six labels total, and no per-cell labels. `ui.py` has four today (`header`,
 `line1`, `line2`, `footer`): `line2` is repurposed as legend row 0, `footer` as
 legend row 1, and two labels are added.
@@ -144,6 +159,12 @@ composition is not inlined in firmware.
 The focused row renders `deck["focus"]` (§7.1) through `km_text.marquee` when it
 exceeds 21 columns, and as plain text when it does not. This is `marquee`'s only
 remaining caller.
+
+`FOCUS_MAX` is therefore **40**, not 21. Trimming to the screen width would make
+the marquee unreachable — `marquee` returns early when the text already fits — so
+a 21-column cap would silently retire the scroll this section specifies. The
+accepted cost is that a scrolling row rewrites one label per tick while it moves;
+that is the one surface allowed to, and it stops as soon as the name fits.
 
 During a re-key countdown this row is replaced (§6).
 
@@ -173,15 +194,20 @@ arrangement, so the screen is a scale model of what is under the fingers.
 
 ### 5.4 Cell text
 
-Six characters: `sss` + `·` + `nn`, where `sss` is the first three characters
+Six characters: `sss` + `:` + `nn`, where `sss` is the first three characters
 of the session name and `nn` the first two alphanumeric characters of the window
-name. Examples: `mir·im`, `col·co`, `bon·ba`.
+name. Examples: `mir:1i`, `col:1c`, `bon:1b`.
 
 A sessionless terminal uses its window class in place of the session name.
 An empty slot renders six spaces.
 
-> The separator is U+00B7 MIDDLE DOT. Per project convention it is never typed
-> literally into a tool call; it is written as an escape and verified.
+> The separator is ASCII `:`. `terminalio.FONT`'s coverage above ASCII has never
+> been verified on this hardware, and `session:index` is tmux's own addressing
+> convention, so the colon is both safer and more idiomatic than a middle dot.
+
+The two alphanumerics are taken from the window name, which arrives as
+`"<index> <name>"` — so they are the tmux window index plus one letter, which is
+the most distinguishing pair available for two windows in the same session.
 
 ### 5.5 State gutters
 
@@ -249,13 +275,22 @@ same thing would be worse than losing them.
 Sent at top level rather than derived pad-side from the focused slot, because the
 focused window may be on a page the user is not viewing; deriving it from `slots`
 would blank the row exactly when it is most wanted. Cost is roughly 25 bytes
-against `LineCodec`'s 2048-byte cap, whose measured worst case is ~1028 bytes.
+against `LineCodec`'s 2048-byte cap, whose worst case is 982 bytes, measured by
+`tests/test_deck.py::test_message_worst_case_wire_size_is_under_the_codec_cap`.
 
 It is composed inside `Deck.message` from `Deck._last`, which already holds every
 window's metadata regardless of page — so no daemon-side plumbing is needed and
 the daemon's `_deck_msg` only loses its `knob` argument.
 
 **Removed:** `"knob"` — there is only one knob mode.
+
+**Removed:** `"map"` and `"bells"`. Both existed to drive the old minimap. The
+legend renders bell state from each slot's own `s` field, so neither is read by
+the pad any more, and `shared/km_deck.py`'s `minimap_boxes` / `minimap_cell` /
+`minimap_pixels` go with them. A production chain with no display is worse than
+no chain at all — it reads as live code and bounds nothing that is drawn.
+
+Note this removes the only consumer of `MINIMAP_MAX_PAGES`.
 
 All other fields are unchanged.
 
@@ -279,7 +314,7 @@ from CPython under pytest and from CircuitPython on the pad:
 | Function | Returns |
 |---|---|
 | `legend_row(slots, row)` | the 20-character string for one legend row |
-| `cell_label(win)` | the six-character `sss·nn` abbreviation |
+| `cell_label(win)` | the six-character `sss:nn` abbreviation |
 | `gutter_pixels(states)` | set of lit `(x, y)` for all twelve gutters |
 | `countdown_text(elapsed_ms)` | `"RE-KEY IN 3"` / `2` / `1` / `None` |
 
@@ -309,7 +344,7 @@ codebase already.
 
 ## 11. Known risks
 
-**Six characters may not disambiguate.** `mir·re` and `mir·recipe-page`
+**Six characters may not disambiguate.** `mir:2r` and `mir:2re`
 collapse to the same abbreviation when two windows in a session share a prefix.
 The premise is that stable position plus a six-character hint is enough once the
 board is learned. This is the assumption most likely to be wrong and the cheapest

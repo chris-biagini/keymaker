@@ -143,8 +143,6 @@ class HyprState:
         self.colors = {}
         self.names = {}
         self.light = False
-        self.cls = ""
-        self.title = ""
         self.addr = ""
         self.fg = {}          # ws id -> {"addr", "cls"} best ws-* client
         self.submap = ""
@@ -193,8 +191,8 @@ class HyprState:
         # Per-workspace ws-* client, for the workspace-aware bottom deck.
         # focusHistoryID 0 is the focused window, ascending = less recent, so the
         # lowest id per workspace is "the terminal you were most recently in there".
-        # Daemon-internal (drives ctx polling and tap focus), never sent to the pad,
-        # so it is deliberately NOT part of the changed-state comparison below.
+        # Daemon-internal, never sent to the pad, so it is deliberately NOT part
+        # of the changed-state comparison below.
         fg = {}
         for c in clients:
             if not str(c.get("class", "")).startswith("ws-"):
@@ -222,24 +220,16 @@ class HyprState:
             self.active, self.occupied, self.urgent_ws, self.colors, self.names = (
                 active, occupied, urgent, colors, names)
             msgs.append(self._ws_msg())
-        cls = (active_win or {}).get("class", "")
-        title = (active_win or {}).get("title", "")[:60]
         self.addr = str((active_win or {}).get("address", ""))
-        if (cls, title) != (self.cls, self.title):
-            self.cls, self.title = cls, title
-            msgs.append(self._win_msg())
         return msgs
 
     def snapshot(self):
-        return [self._ws_msg(), self._win_msg()]
+        return [self._ws_msg()]
 
     def _ws_msg(self):
         return {"t": "ws", "active": self.active, "occupied": self.occupied,
                 "urgent": self.urgent_ws, "colors": self.colors,
                 "names": self.names}
-
-    def _win_msg(self):
-        return {"t": "win", "cls": self.cls, "title": self.title}
 
 
 # A key is for something that can ASK FOR YOU and that you can GO TO locally.
@@ -270,6 +260,18 @@ def _ws_sort_id(wsobj):
     return v if isinstance(v, int) and not isinstance(v, bool) else WS_ID_LAST
 
 
+def _ws_obj(c):
+    """A client's workspace as a dict, whatever Hyprland actually sent.
+
+    Sibling of _ws_sort_id and for the same reason: deck_windows reads `name`
+    off this object, and a client with "workspace": null would raise
+    AttributeError inside _poll_deck -- which catches Exception broadly, so the
+    symptom is a deck that silently stops updating, not a visible failure.
+    """
+    ws = c.get("workspace") if isinstance(c, dict) else None
+    return ws if isinstance(ws, dict) else {}
+
+
 def _is_terminal(cls):
     c = str(cls or "").lower()
     return c in TERMINAL_CLASSES or c.startswith("ws-")
@@ -295,7 +297,7 @@ def deck_windows(tmux_windows, clients):
     for c in clients:
         cls = str(c.get("class", ""))
         if cls.startswith("ws-"):
-            wsobj = c.get("workspace", {})
+            wsobj = _ws_obj(c)
             ws_of_session[cls[3:]] = (_ws_sort_id(wsobj), str(wsobj.get("name", "")))
             used_addrs.add(str(c.get("address", "")))
 
@@ -312,9 +314,10 @@ def deck_windows(tmux_windows, clients):
         addr = str(c.get("address", ""))
         if addr in used_addrs or not _is_terminal(c.get("class")):
             continue
-        entries.append(((_ws_sort_id(c.get("workspace", {})), 1, addr), {
+        wsobj = _ws_obj(c)
+        entries.append(((_ws_sort_id(wsobj), 1, addr), {
             "id": "hypr:" + addr,
-            "ws": str(c.get("workspace", {}).get("name", "")),
+            "ws": str(wsobj.get("name", "")),
             "n": str(c.get("title", "") or c.get("class", ""))}))
 
     entries.sort(key=lambda e: e[0])

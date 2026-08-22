@@ -102,7 +102,7 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
 
     msgs, dispatched = asyncio.run(scenario())
     types = [m["t"] for m in msgs]
-    for expected in ("hello", "ws", "win", "flags"):
+    for expected in ("hello", "ws", "flags"):
         assert expected in types
     # The link-up snapshot goes out before the first Hyprland refresh, so the
     # FIRST ws msg is the default state; the refreshed one arrives last.
@@ -110,199 +110,6 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": [], "colors": {}, "names": {}}
     assert not any(d.startswith("dispatch workspace") for d in dispatched)
     assert not any(d.startswith("dispatch movetoworkspacesilent") for d in dispatched)
-
-
-def test_link_up_reports_current_mute_state(monkeypatch, tmp_path):
-    from keymakerd import volume as vol
-    from keymakerd.__main__ import Config, Supervisor
-
-    async def fake_status():
-        return (0.4, True)
-
-    async def scenario():
-        monkeypatch.setattr(vol, "status", fake_status)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._on_link_up()
-        return sent
-
-    sent = asyncio.run(scenario())
-    flags = next(m for m in sent if m["t"] == "flags")
-    assert flags["muted"] is True
-
-
-def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
-    from keymakerd import volume as vol
-    from keymakerd.__main__ import Config, Supervisor
-
-    async def boom(*a):
-        raise OSError("wpctl missing")
-
-    async def scenario():
-        monkeypatch.setattr(vol, "toggle_mute", boom)
-        monkeypatch.setattr(vol, "status", boom)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._volume(0, True)
-        return sent
-
-    sent = asyncio.run(scenario())
-    assert any(m["t"] == "flags" for m in sent)
-
-
-def _quiet_ledger(monkeypatch):
-    """Keep _poll_ledger AND _poll_deck off the real tmux server during ctx tests.
-
-    _context() calls both every cycle. Left unstubbed, list_deck_windows hits the
-    live tmux server, and -- combined with a Config that also defaults state_dir
-    (see the state_dir=tmp_path audit below) -- deck.update() reconciles against
-    whatever real windows come back, decides the (usually empty state.clients)
-    map has shrunk, and save_deck() overwrites the real
-    ~/.local/state/keymaker/deck-slots.json. That is the exact file sticky
-    allocation exists to protect, from a plain `pytest` run.
-    """
-    from keymakerd import tmux as tmuxmod
-
-    async def none(*a, **k):
-        return None
-
-    monkeypatch.setattr(tmuxmod, "list_bells", none)
-    monkeypatch.setattr(tmuxmod, "list_claude_panes", none)
-    monkeypatch.setattr(tmuxmod, "list_deck_windows", none)
-
-
-def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
-    import keymakerd.__main__ as main_mod
-    from keymakerd import tmux as tmuxmod
-
-    async def fake_list(session):
-        return [{"i": 1, "name": "vim", "active": True, "bell": False}]
-
-    async def scenario():
-        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
-        monkeypatch.setattr(tmuxmod, "list_windows", fake_list)
-        _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        # ws- window on the active workspace -- focus is irrelevant now
-        sup.state.fg = {1: {"addr": "0xb", "cls": "ws-mirepoix"}}
-        task = asyncio.create_task(sup._context())
-        await asyncio.sleep(0.2)
-        sup.state.active = 2                        # workspace with no ws-
-        await asyncio.sleep(0.15)
-        task.cancel()
-        return sent
-
-    sent = asyncio.run(scenario())
-    ctx = [m for m in sent if m["t"] == "ctx"]
-    tmux_msgs = [c for c in ctx if c["mode"] == "tmux"]
-    assert len(tmux_msgs) == 1                      # state-shaped: no re-send
-    assert tmux_msgs[0]["session"] == "mirepoix"
-    assert tmux_msgs[0]["items"][0]["name"] == "vim"
-    assert tmux_msgs[0]["addr"] == "0xb"            # tap needs the window address
-    assert ctx[-1]["mode"] == "none"
-
-
-def test_context_watcher_filters_slots_and_degrades(monkeypatch, tmp_path):
-    import keymakerd.__main__ as main_mod
-    from keymakerd import tmux as tmuxmod
-
-    async def fake_list(session):
-        return [{"i": i, "name": f"w{i}", "active": i == 1, "bell": False}
-                for i in (1, 2, 7)]                 # 7 must be filtered out
-
-    async def fake_list_fail(session):
-        return None
-
-    async def scenario(lister):
-        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
-        monkeypatch.setattr(tmuxmod, "list_windows", lister)
-        _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {1: {"addr": "0xa", "cls": "ws-x"}}
-        task = asyncio.create_task(sup._context())
-        await asyncio.sleep(0.2)
-        task.cancel()
-        return [m for m in sent if m["t"] == "ctx"]
-
-    ctx = asyncio.run(scenario(fake_list))
-    assert [it["i"] for it in ctx[0]["items"]] == [1, 2]
-    ctx = asyncio.run(scenario(fake_list_fail))     # tmux failure → mode none
-    assert ctx == []                                # none == initial state: no emission
-
-
-def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
-    import keymakerd.__main__ as main_mod
-    from keymakerd import tmux as tmuxmod
-
-    async def boom(session):
-        raise RuntimeError("contract violation")
-
-    async def scenario():
-        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
-        monkeypatch.setattr(tmuxmod, "list_windows", boom)
-        _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {1: {"addr": "0xa", "cls": "ws-x"}}
-        task = asyncio.create_task(sup._context())
-        await asyncio.sleep(0.2)
-        alive = not task.done()
-        task.cancel()
-        return alive, [m for m in sent if m["t"] == "ctx"]
-
-    alive, ctx = asyncio.run(scenario())
-    assert alive                      # the watcher survived the raise
-    assert ctx == []                  # degraded to none == initial state, no emission
-
-
-def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_path):
-    # Rename case: class frozen at ws-macropad, session now "keymaker".
-    import keymakerd.__main__ as main_mod
-    from keymakerd import tmux as tmuxmod
-
-    async def lister(session):
-        if session == "keymaker":
-            return [{"i": 1, "name": "vim", "active": True, "bell": False}]
-        return None
-
-    async def scenario():
-        monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
-        monkeypatch.setattr(tmuxmod, "list_windows", lister)
-        _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        sup.state.fg = {3: {"addr": "0xm", "cls": "ws-macropad"}}
-        sup.state.active = 3
-        sup.state.names = {"3": "keymaker"}
-        task = asyncio.create_task(sup._context())
-        await asyncio.sleep(0.2)
-        task.cancel()
-        return [m for m in sent if m["t"] == "ctx"]
-
-    ctx = asyncio.run(scenario())
-    assert ctx and ctx[0]["mode"] == "tmux"
-    assert ctx[0]["session"] == "keymaker"
-    assert ctx[0]["items"][0]["name"] == "vim"
 
 
 def test_deck_tap_selects_tmux_window(monkeypatch, tmp_path):
@@ -389,78 +196,12 @@ def test_deck_tap_focuses_client_first_when_unfocused(monkeypatch, tmp_path):
     assert focused == [("select", "oracle", 2)]   # no focus hop when already there
 
 
-def test_ledger_emission_is_state_shaped_sorted_and_capped(monkeypatch, tmp_path):
-    from keymakerd import tmux as tmuxmod
-    from keymakerd.__main__ import LEDGER_MAX_CLAUDES
-
-    claudes = [{"s": "a", "i": 1, "busy": True, "title": "t1"},
-               {"s": "b", "i": 1, "busy": False, "title": "t2"},
-               {"s": "c", "i": 1, "busy": True, "title": "t3"},
-               {"s": "d", "i": 1, "busy": False, "title": "t4"},
-               {"s": "e", "i": 1, "busy": True, "title": "t5"}]
-    bells = [{"s": "b", "i": 3}]
-
-    async def fake_bells(*a, **k):
-        return bells
-
-    async def fake_panes(*a, **k):
-        return claudes
-
-    async def scenario():
-        monkeypatch.setattr(tmuxmod, "list_bells", fake_bells)
-        monkeypatch.setattr(tmuxmod, "list_claude_panes", fake_panes)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._poll_ledger()
-        await sup._poll_ledger()                  # unchanged: no re-send
-        return sent
-
-    sent = asyncio.run(scenario())
-    ledgers = [m for m in sent if m["t"] == "ledger"]
-    assert len(ledgers) == 1                      # state-shaped
-    got = ledgers[0]["claudes"]
-    assert len(got) == LEDGER_MAX_CLAUDES         # capped for the 1024B line limit
-    # stable sort: the two waiting entries in arrival order, then busy; e shed
-    assert [c["s"] for c in got] == ["b", "d", "a", "c"]
-    assert ledgers[0]["bells"] == bells
-
-
-def test_ledger_msg_sheds_entries_to_fit_line_limit():
-    from keymakerd.__main__ import _ledger_msg, LEDGER_MAX_BYTES
-    import km_proto
-    # quote-heavy titles JSON-escape to 2 bytes/char: worst case measured
-    # 1313B before the size check existed (review 2026-08-16)
-    claudes = [{"s": "s" * 20, "i": 1, "busy": False, "title": '\"' * 20}
-               for _ in range(4)]
-    bells = [{"s": "s" * 20, "i": 1} for _ in range(6)]
-    msg = _ledger_msg(claudes, bells)
-    assert len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES
-    assert msg["bells"]                            # sheds claudes before bells
-
-
-def test_link_up_snapshot_includes_ledger(monkeypatch, tmp_path):
-    async def scenario():
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
-                     state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-        await sup._on_link_up()
-        return sent
-
-    sent = asyncio.run(scenario())
-    assert {"t": "ledger", "claudes": [], "bells": []} in sent
-
-
 def test_link_up_resends_the_deck(tmp_path):
     # C1: a reconnecting pad (USB reset, firmware deploy, the app-menu round
     # trip) must not stay stuck on its empty default deck until some
     # unrelated window event happens to change the computed message.
     sup = _supervisor(tmp_path)
-    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1,
                     "ws": [["mirepoix", "e16000"]],
                     "slots": [{"i": 0, "c": 0, "n": "1 rails", "s": "live"}],
                     "map": [1], "bells": []}
@@ -488,59 +229,10 @@ def test_link_drop_clears_deck_msg_so_the_next_poll_resends(tmp_path):
     # re-emit on its next pass rather than staying silent because the computed
     # message is unchanged from before the drop.
     sup = _supervisor(tmp_path)
-    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
+    sup.deck_msg = {"t": "deck", "page": 0, "pages": 1,
                     "ws": [], "slots": [], "map": [0], "bells": []}
     sup._on_link_down()
     assert sup.deck_msg is None
-
-
-class TestCoachMessages:
-    # NOTE: Config's field defaults (env lookups) evaluate at import time,
-    # so tests pass state_dir explicitly — monkeypatching the env after
-    # import would silently do nothing.
-    def test_coach_session_persists_and_acks_with_state(self, tmp_path):
-        cfg = Config(state_dir=tmp_path)
-        sup = Supervisor(cfg)
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-
-        async def go():
-            sup._on_pad_msg({"t": "coach", "session": {
-                "stage": 1, "bpm": 95, "swing": None, "greens": 16,
-                "ambers": 0, "reds": 0, "misses": 0, "strays": 0,
-                "score": 1.0, "duration_ms": 40000}})
-            await asyncio.gather(*sup._tasks)
-        asyncio.run(go())
-
-        assert len(sup.coach.load()) == 1
-        states = [m for m in sent if m.get("t") == "coach"]
-        assert states and states[-1]["stages"]["1"]["best"] == 1.0
-
-    def test_coach_ignores_garbage_session(self, tmp_path):
-        sup = Supervisor(Config(state_dir=tmp_path))
-        sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
-
-        async def go():
-            sup._on_pad_msg({"t": "coach", "session": "not-a-dict"})
-            sup._on_pad_msg({"t": "coach"})
-            await asyncio.gather(*sup._tasks)
-        asyncio.run(go())
-        assert sup.coach.load() == []
-
-    def test_coach_rejects_invalid_session_but_still_acks(self, tmp_path):
-        sup = Supervisor(Config(state_dir=tmp_path))
-        sent = []
-        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-
-        async def go():
-            sup._on_pad_msg({"t": "coach", "session": {
-                "stage": None, "score": 0.9, "duration_ms": 40000}})
-            await asyncio.gather(*sup._tasks)
-        asyncio.run(go())
-
-        assert sup.coach.load() == []
-        states = [m for m in sent if m.get("t") == "coach"]
-        assert states and states[-1]["unlocked"] == 1
 
 
 def test_dispatch_oserror_keeps_instance(tmp_path):
@@ -569,23 +261,9 @@ def test_deck_message_is_emitted_from_live_state(tmp_path, monkeypatch):
     assert msg["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "focused"}]
 
 
-def test_knob_press_toggles_mode_and_rotation_only_pages_in_page_mode(tmp_path):
-    sup = _supervisor(tmp_path)
-    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
-    assert sup.knob_mode == "vol"
-    sup.on_knob_press()
-    assert sup.knob_mode == "page"
-    sup.on_knob_turn(1)
-    assert sup.deck_page == 1
-    sup.on_knob_press()                          # back to volume
-    sup.on_knob_turn(1)
-    assert sup.deck_page == 1                    # rotation no longer pages
-
-
 def test_paging_wraps_and_never_lands_on_a_page_that_does_not_exist(tmp_path):
     sup = _supervisor(tmp_path)
     sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
-    sup.knob_mode = "page"
     sup.on_knob_turn(-1)
     assert sup.deck_page == 1                    # wrapped backwards
     sup.on_knob_turn(1)
@@ -618,7 +296,7 @@ def test_slots_persist_across_a_supervisor_restart(tmp_path):
     assert again.deck.slots == {"tmux:@7": 0}
 
 
-def test_click_and_dial_resend_the_deck_message_immediately(tmp_path):
+def test_dial_resends_the_deck_message_immediately(tmp_path):
     # Without this, a knob gesture is invisible on the pad until the next
     # _poll_deck cycle, up to CTX_POLL_S (1s) later -- reads as a broken knob.
     sup = _supervisor(tmp_path)
@@ -628,20 +306,15 @@ def test_click_and_dial_resend_the_deck_message_immediately(tmp_path):
     # Simulate a poll having already landed once, without running one for real.
     sup._deck_render_args = ({"a": "ffffff"}, None, set())
 
-    sup._on_pad_msg({"t": "click"})                  # vol -> page
-    assert sup.knob_mode == "page"
-    assert sent and sent[-1]["t"] == "deck" and sent[-1]["knob"] == "page"
-
-    sup._on_pad_msg({"t": "dial", "d": 1})            # page mode: pages immediately
+    sup._on_pad_msg({"t": "dial", "d": 1})            # pages immediately
     assert sup.deck_page == 1
-    assert sent[-1]["t"] == "deck" and sent[-1]["page"] == 1
+    assert sent and sent[-1]["t"] == "deck" and sent[-1]["page"] == 1
 
 
 def test_knob_gestures_before_the_first_poll_send_nothing(tmp_path):
     sup = _supervisor(tmp_path)
     sent = []
     sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
-    sup._on_pad_msg({"t": "click"})
     sup._on_pad_msg({"t": "dial", "d": 1})
     assert sent == []                                 # no _deck_render_args yet: no crash, no send
 
@@ -823,3 +496,33 @@ def test_poll_deck_tmux_outage_still_ghosts_tmux_windows_that_disappear(monkeypa
     slots, ghosts = asyncio.run(scenario())
     assert slots == {}
     assert ghosts == {0: {"ws": "mirepoix", "n": "1 rails"}}
+
+
+def test_rekey_clears_slots_and_ghosts_and_re_derives_in_order(tmp_path):
+    # Sticky allocation means a window keeps its first slot for life, so this
+    # is the ONLY way to reorder a board once assignments exist.
+    sup = _supervisor(tmp_path)
+    sup.deck.slots = {"tmux:@9": 0, "tmux:@1": 1}
+    sup.deck.ghosts = {5: {"ws": "gone", "n": "1 old"}}
+    sup.deck._last = {"tmux:@9": {"ws": "b", "n": "1 x"},
+                      "tmux:@1": {"ws": "a", "n": "1 y"}}
+    sup._deck_render_args = ({}, None, [])
+    sup._deck_wins = [{"id": "tmux:@1", "ws": "a", "n": "1 y"},
+                      {"id": "tmux:@9", "ws": "b", "n": "1 x"}]
+    sup.on_rekey()
+    assert sup.deck.slots == {"tmux:@1": 0, "tmux:@9": 1}
+    assert sup.deck.ghosts == {}
+
+
+def test_rekey_before_first_poll_does_not_wipe_the_restored_board(tmp_path):
+    # Before the first _poll_deck lands, _deck_wins is []. Without the guard,
+    # on_rekey would call deck.update([]), wiping every slot restored from
+    # disk on startup, and then PERSIST that empty board to deck-slots.json --
+    # destroying it, not just showing it wrong until the next poll.
+    sup = _supervisor(tmp_path)
+    sup.deck.slots = {"tmux:@9": 0, "tmux:@1": 1}
+    sup.deck.ghosts = {5: {"ws": "gone", "n": "1 old"}}
+    assert sup._deck_wins == []
+    sup.on_rekey()
+    assert sup.deck.slots == {"tmux:@9": 0, "tmux:@1": 1}
+    assert sup.deck.ghosts == {5: {"ws": "gone", "n": "1 old"}}

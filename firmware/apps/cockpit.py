@@ -1,6 +1,7 @@
 """Cockpit: the switchboard deck. Keys are sticky slots over every running
-terminal window, one page (12 slots) at a time; knob pages or adjusts volume
-depending on daemon-side mode; OLED = identity + attention ledger."""
+terminal window, one page (12 slots) at a time; knob pages; OLED = identity.
+The lower two lines are a four-row, twelve-cell legend plus a state-gutter
+bitmap; see firmware/pad/ui.py and shared/km_deck.py."""
 from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_deck
@@ -16,11 +17,9 @@ class Cockpit(App):
     name = "cockpit"
 
     def __init__(self):
-        self.deck = {"t": "deck", "page": 0, "pages": 1, "knob": "vol",
-                     "ws": [], "slots": [], "map": [0], "bells": []}
-        self.ledger = {"t": "ledger", "claudes": [], "bells": []}
-        self.win = {"cls": "", "title": ""}
-        self.flags = {"submap": "", "screencast": False, "muted": False}
+        self.deck = {"t": "deck", "page": 0, "pages": 1, "total": 0, "focus": "",
+                     "ws": [], "slots": []}
+        self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
         # Last frame actually written to the strip. `pixels.auto_write` stays True
@@ -29,13 +28,25 @@ class Cockpit(App):
         # at zero writes per tick instead of a clear-then-repaint strobe. None
         # forces a full first paint.
         self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
-        # Last text/signature actually written to each OLED surface, so
-        # _draw_text can skip a redundant write instead of dirtying the panel
-        # every tick.
-        self._map_sig = None
+        # Last text actually written to each OLED surface, so _draw_text can
+        # skip a redundant write instead of dirtying the panel every tick.
         self._header_text = None
-        self._line1_text = None
-        self._line2_text = None
+        self._focus_text = None
+        self._legend = None
+        # A re-key countdown owns the focused row while a hold is in progress,
+        # and an in-progress hold's encoder-down state. Both are set only here,
+        # never in on_show -- a hold in progress must not survive a repaint.
+        self._countdown = None
+        self._enc_down = None
+        # Latches "idle_card has already been painted this outage" so
+        # _draw_text's no-link branch writes it once per outage rather than
+        # every tick of the `while True:` main loop -- Label.text has no
+        # equality short-circuit, so an unconditional write rebuilds six
+        # labels' glyph TileGrids on every pass and pins panel refresh. Set
+        # False here (not on_show) so a repaint never re-arms a stale idle
+        # write, and reset to False the instant the link comes back up so
+        # recovery still repaints.
+        self._idle = False
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
@@ -43,24 +54,19 @@ class Cockpit(App):
         # frame (LEDs) or the last app's stale text (OLED) stuck instead of
         # being redrawn.
         self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
-        self._map_sig = None
         self._header_text = None
-        self._line1_text = None
-        self._line2_text = None
+        self._focus_text = None
+        self._legend = None
         self._draw_all(ticks_ms())
 
     def on_msg(self, msg):
         t = msg["t"]
         if t == "deck":
             self.deck = msg
-        elif t == "win":
-            self.win = msg
         elif t == "flags":
             self.flags = msg
         elif t == "palette":
             self.palette = msg
-        elif t == "ledger":
-            self.ledger = msg
         self._draw_all(ticks_ms())
 
     def on_key_event(self, n, pressed, now):
@@ -72,14 +78,31 @@ class Cockpit(App):
     def on_dial(self, delta):
         self.link.send({"t": "dial", "d": delta})
 
-    def on_click(self):
-        self.link.send({"t": "click"})
+    def on_enc(self, pressed, now):
+        if pressed:
+            self._enc_down = now
+            return
+        # Released. Fire only if the hold ran the full countdown; anything
+        # shorter is an abort, and an abort sends nothing at all.
+        if self._enc_down is not None:
+            held = ticks_diff(now, self._enc_down)
+            if held >= km_deck.REKEY_FIRE_MS:
+                self.link.send({"t": "rekey"})
+        self._enc_down = None
+        self._countdown = None
+
+    def _tick_countdown(self, now):
+        if self._enc_down is None:
+            self._countdown = None
+            return
+        self._countdown = km_deck.countdown_text(ticks_diff(now, self._enc_down))
 
     def tick(self, now):
+        self._tick_countdown(now)
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})
         self._draw_leds(now)          # every pass: urgent pulse animation
-        self._draw_text(now)          # marquee needs time too
+        self._draw_text(now)          # every pass: gutter blink needs time too
 
     # ---- drawing --------------------------------------------------
     def _draw_leds(self, now):
@@ -103,99 +126,54 @@ class Cockpit(App):
 
     def _draw_text(self, now):
         if not self.link.up:
-            self.screen.idle_card()
-            # idle_card writes header/line1/line2 directly, bypassing the
-            # caches below; invalidate them so link recovery forces a full
-            # repaint instead of comparing against what idle_card left on screen.
-            self._header_text = self._line1_text = self._line2_text = None
-            self._map_sig = None
+            # idle_card() rebuilds six labels' glyph TileGrids on every call, so
+            # it must only run once per outage, not every tick -- see the
+            # _idle latch set up in __init__.
+            if not self._idle:
+                self.screen.idle_card()
+                # idle_card writes header/focus/legend/gutters directly,
+                # bypassing the caches below; invalidate them so link recovery
+                # forces a full repaint instead of comparing against what
+                # idle_card left on screen.
+                self._header_text = self._focus_text = None
+                self._legend = None
+                self._idle = True
             return
+        self._idle = False
         d = self.deck
         blink = (now // 450) % 2 == 0
-        # len(d["map"]), NOT d["pages"]: km_deck caps `map` at MINIMAP_MAX_PAGES (5)
-        # because only five boxes fit in the 94px minimap strip alongside the
-        # counts column, while `pages` counts every page the KEYS can reach.
-        # Passing `pages` would draw boxes off the right edge of the strip.
-        #
-        # Only recompute when an input actually changed. The blink phase belongs
-        # in the signature ONLY when something is ringing: it flips twice a
-        # second forever, so including it unconditionally means a redraw twice a
-        # second on a completely idle deck -- which is exactly what read as a
-        # periodic blink on the panel. With no bells, blink changes nothing that
-        # gets drawn, so it must not force the redraw either.
-        sig = (blink and bool(d["bells"]), d["page"], tuple(d["map"]),
-               tuple(d["bells"]))
-        if sig != self._map_sig:
-            self._map_sig = sig
-            self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
-        # Badges carried over from the pre-switchboard header; a separate
-        # ruling in this plan removed the pad's mute *gesture*, so dropping
-        # its indicator too would take away the control and its display in
-        # the same release. Mode is shortened to P1/2 (was PAGE 1/2) to leave
-        # room for badges inside the 21-column header. Composition (which
-        # badges survive when the line is tight, and never truncating the
-        # mode) is km_text.header_line's job, not inline arithmetic here --
-        # that arithmetic proved buggy once already (round 3: it ate "P10/12"
-        # down to "P1" under badge pressure) while sitting in untestable
-        # firmware.
+
         badges = []
         if self.flags["screencast"]:
             badges.append("REC")
-        if self.flags["muted"]:
-            badges.append("MUTE")
         if self.flags["submap"]:
             badges.append("[" + self.flags["submap"] + "]")
-        mode = ("P%d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
+        mode = "P%d/%d %dw" % (d["page"] + 1, d["pages"], d["total"])
         header = header_line("nexus", badges, mode, WIDTH_CHARS)
-        # set_header touches every glyph in the inverted bar; skip the write
-        # when the text hasn't changed instead of re-setting it every tick.
         if header != self._header_text:
             self._header_text = header
             self.screen.set_header(header)
-        # Attention ledger: what is waiting on you, machine-wide. Blank lines
-        # mean all clear -- a glanceable state in itself, and it reads across a
-        # locked screen because the pad is a display hyprlock cannot cover.
-        claudes = self.ledger.get("claudes", [])
-        bells = self.ledger.get("bells", [])
-        waiting = [c for c in claudes if not c.get("busy")]
-        busy = len(claudes) - len(waiting)
-        # line1 does double duty: waiting Claudes and the busy count are
-        # mutually exclusive in practice -- a fleet with something waiting is
-        # a fleet you should look at before counting what is merely running --
-        # so busy only shows on the row when there is nothing waiting to show
-        # instead. Keeps the "N working" indicator without a screen row of
-        # its own (footer is now the minimap's counts column).
-        if waiting:
-            text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
-            line1 = marquee("* " + text, WIDTH_CHARS, now)
-        elif busy:
-            line1 = "%d working" % busy
-        else:
-            line1 = ""
-        if bells:
-            text = " ".join(b.get("s", "?") + ":" + str(b.get("i", "?")) for b in bells)
-            line2 = marquee("! " + text, WIDTH_CHARS, now)
-        else:
-            line2 = ""
-        # marquee legitimately returns a new string most ticks while scrolling,
-        # so this is gated on the value actually changing, not on time -- it
-        # still skips the write whenever a marquee isn't moving (or there's
-        # nothing to show) without ever holding a scroll still.
-        if line1 != self._line1_text:
-            self._line1_text = line1
-            self.screen.line1.text = line1
-        if line2 != self._line2_text:
-            self._line2_text = line2
-            self.screen.line2.text = line2
-        # Minimap counts column (spec 8.2): total occupied slots on the pages
-        # the minimap can draw, plus how many unacked bells are on a page that
-        # isn't the one currently on the keys -- the number the blinking cell
-        # alone can't convey once it's off-page. `map` is a per-page bitmask
-        # (km_deck.Deck.message), so the total is a popcount, not a sum --
-        # bin() is available on CircuitPython.
-        total = sum(bin(m).count("1") for m in d["map"])
-        off_page = sum(1 for g in d["bells"] if g // km_deck.SLOTS_PER_PAGE != d["page"])
-        self.screen.footer.text = ("%d+%d!" % (total, off_page))[:5] if off_page else str(total)[:5]
+
+        # A re-key countdown owns the focused row while a hold is in progress.
+        focus = self._countdown if self._countdown is not None else d["focus"]
+        focus = marquee(focus, WIDTH_CHARS, now)
+        if focus != self._focus_text:
+            self._focus_text = focus
+            self.screen.set_focus(focus)
+
+        labels = [" " * km_deck.CELL_CHARS] * km_deck.SLOTS_PER_PAGE
+        states = ["empty"] * km_deck.SLOTS_PER_PAGE
+        for slot in d["slots"]:
+            ws = d["ws"][slot["c"]][0]
+            labels[slot["i"]] = km_deck.cell_label(ws, slot["n"])
+            states[slot["i"]] = slot["s"]
+        legend = [km_deck.legend_row(labels, r) for r in range(km_deck.LEGEND_ROWS)]
+        # Labels are rewritten only when the deck actually changes; the blink
+        # below never touches them. See docs/pad-timing.md section 5.
+        if legend != self._legend:
+            self._legend = legend
+            self.screen.set_legend(legend)
+        self.screen.set_gutters(km_deck.gutter_pixels(states, blink))
 
     def _draw_all(self, now):
         self._draw_leds(now)
