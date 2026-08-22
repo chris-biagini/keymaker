@@ -5,7 +5,7 @@ from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_palette
 from km_keys import KeyTracker
-from km_text import marquee
+from km_text import header_line, marquee
 
 from pad.framework import App
 from pad.ui import WIDTH_CHARS
@@ -89,17 +89,21 @@ class Cockpit(App):
         # ruling in this plan removed the pad's mute *gesture*, so dropping
         # its indicator too would take away the control and its display in
         # the same release. Mode is shortened to P1/2 (was PAGE 1/2) to leave
-        # room for badges inside the 21-column header.
-        badges = ""
+        # room for badges inside the 21-column header. Composition (which
+        # badges survive when the line is tight, and never truncating the
+        # mode) is km_text.header_line's job, not inline arithmetic here --
+        # that arithmetic proved buggy once already (round 3: it ate "P10/12"
+        # down to "P1" under badge pressure) while sitting in untestable
+        # firmware.
+        badges = []
         if self.flags["screencast"]:
-            badges += " REC"
+            badges.append("REC")
         if self.flags["muted"]:
-            badges += " MUTE"
+            badges.append("MUTE")
         if self.flags["submap"]:
-            badges += " [" + self.flags["submap"] + "]"
+            badges.append("[" + self.flags["submap"] + "]")
         mode = ("P%d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
-        prefix = "nexus" + badges
-        self.screen.set_header(prefix + " " * max(1, WIDTH_CHARS - len(prefix) - len(mode)) + mode)
+        self.screen.set_header(header_line("nexus", badges, mode, WIDTH_CHARS))
         # Attention ledger: what is waiting on you, machine-wide. Blank lines
         # mean all clear -- a glanceable state in itself, and it reads across a
         # locked screen because the pad is a display hyprlock cannot cover.
