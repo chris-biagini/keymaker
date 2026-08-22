@@ -72,9 +72,6 @@ class Cockpit(App):
     def on_dial(self, delta):
         self.link.send({"t": "dial", "d": delta})
 
-    def on_click(self):
-        self.link.send({"t": "click"})
-
     def tick(self, now):
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})

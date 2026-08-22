@@ -40,8 +40,10 @@ form of the project's standing rule that hue is never the only channel.
 | Coach | `firmware/apps/coach.py`, `shared/km_coach.py`, `daemon/keymakerd/coach_store.py`, `tools/make_drums.py`, `tests/test_coach.py`, `tests/test_coach_store.py`, `tests/test_drums.py` |
 | Audio | `firmware/pad/audio.py`, `tests/test_audio.py` |
 
-Any generated drum sample assets on the CIRCUITPY volume are removed by the next
-firmware deploy; they are not tracked in the repo.
+The drum samples at `firmware/sounds/*.wav` (`click_hi`, `click_lo`, `hat`,
+`kick`, `snare`) go too. An earlier draft of this spec claimed they were untracked
+build products; they are in fact committed, and nothing reads them once
+`pad/audio.py` and `apps/coach.py` are gone.
 
 ### 3.2 Code deleted
 

@@ -265,9 +265,11 @@ Delete `_ctx_none`, `self.ctx = _ctx_none()`, and `self.link.send(self.ctx)` in 
 
 In `daemon/keymakerd/hyprland.py`, delete `win_msg` (the `{"t": "win", ...}` builder) — it is never sent.
 
-In `shared/km_palette.py`, delete `ws_key_color` and `ctx_key_color`. They served the pre-switchboard split deck and die with `ctx`.
+In `shared/km_palette.py`, delete `ws_key_color`. It served the pre-switchboard split deck and dies with `ctx`.
 
-Verify first: `grep -rn "ws_key_color\|ctx_key_color" --include=*.py . | grep -v __pycache__` — if anything outside `tests/test_palette.py` still calls them, STOP and report rather than deleting. Remove their tests along with them.
+`ctx_key_color` and `INDEX_BINS` were already removed in Task 1: `INDEX_BINS` had a second caller the brief did not know about — `ctx_key_color` itself — so deleting one forced the other. Do not look for them.
+
+Verify first: `grep -rn "ws_key_color" --include=*.py . | grep -v __pycache__` — if anything outside `tests/test_palette.py` still calls it, STOP and report rather than deleting. Remove its tests along with it, including the stale mention in the comment at `tests/test_palette.py:118`.
 
 - [ ] **Step 3b: Delete the tests for what you just removed**
 
