@@ -247,3 +247,78 @@ def test_minimap_pixels_matches_a_reference_clear_then_repaint():
             for dy in range(3):
                 ref.add((cx + dx, cy + dy))
     assert km_deck.minimap_pixels(pages, page, masks, bells, blink) == ref
+
+
+def test_cell_label_is_always_exactly_six_characters():
+    # The legend row packs three cells at a fixed 7-character pitch; a label of
+    # any other length shifts every column to its right.
+    for ws, name in [("mirepoix", "2 recipe-page-redesign"), ("a", "x"),
+                     ("", ""), ("colorhash", "1 color-hash")]:
+        assert len(km_deck.cell_label(ws, name)) == 6
+
+
+def test_cell_label_keeps_the_tmux_index_as_a_disambiguator():
+    # Window names arrive as "<index> <name>", and the index is the most
+    # distinguishing thing about two windows in the same session.
+    assert km_deck.cell_label("mirepoix", "2 recipe-page") == "mir:2r"
+    assert km_deck.cell_label("mirepoix", "3 alias-bug") == "mir:3a"
+
+
+def test_cell_label_pads_a_short_session_rather_than_shifting_columns():
+    assert km_deck.cell_label("a", "1 sh") == "a  :1s"
+
+
+def test_legend_row_is_twenty_characters_with_gaps_at_6_and_13():
+    labels = ["ab" + str(i) + "de" + str(i) for i in range(12)]
+    row = km_deck.legend_row(labels, 1)
+    assert len(row) == 20
+    assert row[6] == " " and row[13] == " "
+    assert row[0:6] == labels[3] and row[7:13] == labels[4] and row[14:20] == labels[5]
+
+
+def test_legend_row_renders_missing_slots_as_blanks():
+    row = km_deck.legend_row(["abcdef"], 0)
+    assert row == "abcdef" + " " * 14
+
+
+def test_gutter_pixels_empty_state_lights_nothing():
+    assert km_deck.gutter_pixels(["empty"] * 12, True) == set()
+
+
+def test_gutter_pixels_live_is_a_single_column():
+    lit = km_deck.gutter_pixels(["live"] + ["empty"] * 11, True)
+    assert lit == {(1, y) for y in range(9)}
+
+
+def test_gutter_pixels_ghost_is_a_dotted_column():
+    lit = km_deck.gutter_pixels(["ghost"] + ["empty"] * 11, True)
+    assert lit == {(1, y) for y in range(0, 9, 2)}
+
+
+def test_gutter_pixels_focused_is_hollow_and_bell_is_solid():
+    hollow = km_deck.gutter_pixels(["focused"] + ["empty"] * 11, True)
+    solid = km_deck.gutter_pixels(["bell"] + ["empty"] * 11, True)
+    assert len(solid) == 4 * 9
+    assert hollow < solid            # a proper subset: outline inside the block
+    assert (2, 4) in solid and (2, 4) not in hollow
+
+
+def test_gutter_pixels_bell_goes_dark_on_the_off_phase():
+    assert km_deck.gutter_pixels(["bell"] + ["empty"] * 11, False) == set()
+
+
+def test_gutter_pixels_places_each_slot_in_the_key_grid():
+    # Slot i lives at row i//3, column i%3 -- the MacroPad's physical layout.
+    lit = km_deck.gutter_pixels(["empty"] * 4 + ["live"] + ["empty"] * 7, True)
+    assert lit == {(1 + 42, y) for y in range(10, 19)}
+
+
+def test_countdown_text_boundaries():
+    assert km_deck.countdown_text(0) is None
+    assert km_deck.countdown_text(499) is None
+    assert km_deck.countdown_text(500) == "RE-KEY IN 3"
+    assert km_deck.countdown_text(1499) == "RE-KEY IN 3"
+    assert km_deck.countdown_text(1500) == "RE-KEY IN 2"
+    assert km_deck.countdown_text(2500) == "RE-KEY IN 1"
+    assert km_deck.countdown_text(3499) == "RE-KEY IN 1"
+    assert km_deck.countdown_text(3500) == "RE-KEYING"

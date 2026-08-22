@@ -185,3 +185,111 @@ def minimap_pixels(pages, page, masks, bells, blink, y=0):
                 for dy in range(3):
                     lit.add((cx + dx, cy + dy))
     return lit
+
+
+# ---- OLED legend geometry (spec section 5.3-5.5) ---------------------------
+# Here rather than in firmware/pad/ui.py so it is unit-testable: CircuitPython
+# does not run under pytest, so any arithmetic left in the firmware is
+# arithmetic nobody can check.
+
+CELL_CHARS = 6          # "sss<sep>nn"
+LEGEND_COLS = 3
+LEGEND_ROWS = 4
+CELL_SEP = ":"          # ASCII on purpose -- see the plan's ruling
+GUTTER_W = 4
+GUTTER_H = 9
+GUTTER_PITCH_X = 42     # exactly seven 6px character cells
+GUTTER_PITCH_Y = 10
+GUTTER_X0 = 1
+
+
+def _alnum2(s):
+    """First two alphanumerics of `s`, right-padded to two.
+
+    str.isalnum() is absent on CircuitPython, so the class test is explicit.
+    """
+    out = ""
+    for c in s:
+        if ("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9"):
+            out += c
+            if len(out) == 2:
+                break
+    return (out + "  ")[:2]
+
+
+def cell_label(ws, name):
+    """One legend cell: three of the workspace, a separator, two of the window.
+
+    Always exactly CELL_CHARS characters -- the legend row packs three cells at a
+    fixed 7-character pitch, so a short label would shift every column right of
+    it. Window names arrive as "<index> <name>", so the first two alphanumerics
+    are the tmux index plus one letter, which is the most distinguishing thing
+    about two windows in the same session.
+    """
+    return (ws[:3] + "   ")[:3] + CELL_SEP + _alnum2(name)
+
+
+def legend_row(labels, row):
+    """One 20-character legend row: three cells separated by single spaces.
+
+    Character 6 and character 13 are always those spaces. They overlap the next
+    column's gutter on screen, which is harmless precisely because they are blank.
+    """
+    out = []
+    for col in range(LEGEND_COLS):
+        i = row * LEGEND_COLS + col
+        out.append(labels[i] if i < len(labels) else " " * CELL_CHARS)
+    return " ".join(out)
+
+
+def gutter_pixels(states, blink, y0=0):
+    """Lit pixels of all twelve state gutters, bitmap-local, as a set of (x, y).
+
+    Five states told apart by SHAPE, not brightness: a one-bit panel has no hue
+    to spare and no intensity either, so shape is the only channel left.
+
+    Returned as a whole frame so the caller can paint the DIFFERENCE against the
+    previous frame. Never clear and repaint: displayio's auto_refresh is on, and
+    a cleared bitmap is a blank frame the panel can scan out. See
+    docs/pad-timing.md section 5.
+    """
+    lit = set()
+    for i, st in enumerate(states[:LEGEND_COLS * LEGEND_ROWS]):
+        x = GUTTER_X0 + (i % LEGEND_COLS) * GUTTER_PITCH_X
+        y = y0 + (i // LEGEND_COLS) * GUTTER_PITCH_Y
+        if st == "live":
+            for dy in range(GUTTER_H):
+                lit.add((x, y + dy))
+        elif st == "ghost":
+            for dy in range(0, GUTTER_H, 2):
+                lit.add((x, y + dy))
+        elif st == "focused":
+            for dx in range(GUTTER_W):
+                lit.add((x + dx, y))
+                lit.add((x + dx, y + GUTTER_H - 1))
+            for dy in range(GUTTER_H):
+                lit.add((x, y + dy))
+                lit.add((x + GUTTER_W - 1, y + dy))
+        elif st == "bell" and blink:
+            for dx in range(GUTTER_W):
+                for dy in range(GUTTER_H):
+                    lit.add((x + dx, y + dy))
+    return lit
+
+
+REKEY_START_MS = 500     # below this a hold shows nothing: a brush is not intent
+REKEY_STEP_MS = 1000
+REKEY_FIRE_MS = 3500
+
+
+def countdown_text(elapsed_ms):
+    """Focused-row text during a re-key hold, or None when the row is unchanged.
+
+    Hold-to-confirm rather than a plain long-press: re-keying reorders the whole
+    board, and sticky allocation means there is no undo.
+    """
+    if elapsed_ms < REKEY_START_MS:
+        return None
+    if elapsed_ms >= REKEY_FIRE_MS:
+        return "RE-KEYING"
+    return "RE-KEY IN %d" % (3 - (elapsed_ms - REKEY_START_MS) // REKEY_STEP_MS)
