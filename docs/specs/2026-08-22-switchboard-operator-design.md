@@ -63,8 +63,12 @@ build products; they are in fact committed, and nothing reads them once
 
 **`daemon/keymakerd/hyprland.py`**
 
-- `win_msg` (`{"t": "win", ...}`) — never sent; the focused window now travels in
-  `deck` (§7.1)
+- `_win_msg` (`{"t": "win", ...}`) and the `HyprState.cls` / `.title` attributes that
+  feed it. An earlier draft of this spec claimed it was never sent; that was wrong —
+  it ships on every refresh and snapshot. It is retired because nothing consumes it:
+  `cockpit.py` stored `self.win` and never read it, and the focused window now travels
+  in `deck` (§7.1). `HyprState.fg[ws]["cls"]` is a different attribute and stays —
+  `_focused_window_id` depends on it.
 
 **`shared/km_palette.py`**
 
