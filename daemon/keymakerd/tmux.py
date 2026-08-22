@@ -133,3 +133,38 @@ async def list_claude_panes(run=_run):
     if rc != 0:
         return None
     return parse_claude_panes(out)
+
+
+# The deck keys off #{window_id} (@7), NOT session:index. Indices move under
+# move-window, swap-window and renumber-windows, any of which would silently
+# reshuffle every key and defeat sticky allocation in the way hardest to notice.
+DECK_FORMAT = ("#{session_name}\t#{window_id}\t#{window_index}\t"
+               "#{window_active}\t#{window_bell_flag}\t#{window_name}")
+
+
+def parse_deck_windows(out):
+    """Every window on the server as [{id, s, i, n, active, bell}]."""
+    items = []
+    for line in out.splitlines():
+        parts = line.split("\t", 5)
+        if len(parts) != 6:
+            continue
+        sess, wid, idx, active, bell, name = parts
+        try:
+            i = int(idx)
+        except ValueError:
+            continue
+        items.append({"id": "tmux:" + wid, "s": sess, "i": i, "n": name,
+                      "active": active == "1", "bell": bell == "1"})
+    return items
+
+
+async def list_deck_windows(run=_run):
+    """Every window across ALL sessions, or None on failure."""
+    try:
+        rc, out = await run("list-windows", "-a", "-F", DECK_FORMAT)
+    except OSError:
+        return None
+    if rc != 0:
+        return None
+    return parse_deck_windows(out)

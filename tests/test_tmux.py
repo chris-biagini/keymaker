@@ -155,3 +155,31 @@ def test_ledger_listers_none_on_failure():
 
     assert asyncio.run(tmux.list_bells(run=bad_rc)) is None
     assert asyncio.run(tmux.list_claude_panes(run=raises)) is None
+
+
+def test_parse_deck_windows_uses_tmux_window_id_not_session_index():
+    # Fixture field order: session, window_id, index, active, bell, name.
+    # NOTE: active (field 4) precedes bell (field 5). First two rows have them
+    # swapped in earlier draft; inversion was invisible on the all-zero third row.
+    out = ("mirepoix\t@2\t1\t1\t0\trails\n"
+           "mirepoix\t@5\t3\t0\t1\tlogs\n"
+           "colorhash\t@9\t1\t0\t0\tlab\n")
+    got = tmux.parse_deck_windows(out)
+    assert got == [
+        {"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails",
+         "active": True, "bell": False},
+        {"id": "tmux:@5", "s": "mirepoix", "i": 3, "n": "logs",
+         "active": False, "bell": True},
+        {"id": "tmux:@9", "s": "colorhash", "i": 1, "n": "lab",
+         "active": False, "bell": False},
+    ]
+
+
+def test_parse_deck_windows_skips_malformed_and_unparseable_index():
+    out = "sess\t@1\tnotanint\t0\t0\tname\nsess\t@2\ttoo\tfew\n\nok\t@3\t2\t0\t0\tn\n"
+    assert [x["id"] for x in tmux.parse_deck_windows(out)] == ["tmux:@3"]
+
+
+def test_deck_format_requests_window_id():
+    assert "#{window_id}" in tmux.DECK_FORMAT
+    assert "#{window_bell_flag}" in tmux.DECK_FORMAT
