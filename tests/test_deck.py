@@ -61,3 +61,65 @@ def test_beyond_twelve_windows_keep_allocating_into_later_pages():
     d = km_deck.Deck()
     d.update([w("tmux:@%d" % i, "a", str(i)) for i in range(20)])
     assert sorted(d.slots.values()) == list(range(20))
+
+
+import json
+import km_proto
+
+
+def test_page_count_is_one_when_empty_and_grows_by_twelve():
+    d = km_deck.Deck()
+    assert d.page_count() == 1
+    d.update([w("tmux:@%d" % i, "a", str(i)) for i in range(12)])
+    assert d.page_count() == 1
+    d.update([w("tmux:@%d" % i, "a", str(i)) for i in range(13)])
+    assert d.page_count() == 2
+
+
+def test_message_carries_only_the_current_page_with_ws_by_reference():
+    d = km_deck.Deck()
+    d.update([w("tmux:@1", "mirepoix", "1 rails"), w("tmux:@2", "colorhash", "1 lab")])
+    m = d.message(page=0, knob="page", colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
+    assert m["t"] == "deck"
+    assert m["ws"] == [["colorhash", "6d0a9e"], ["mirepoix", "e16000"]]
+    assert m["slots"] == [{"i": 0, "c": 0, "n": "1 lab", "s": "live"},
+                          {"i": 1, "c": 1, "n": "1 rails", "s": "live"}]
+    assert m["pages"] == 1 and m["page"] == 0 and m["knob"] == "page"
+
+
+def test_message_marks_focused_bell_and_ghost_states():
+    d = km_deck.Deck()
+    d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2"), w("tmux:@3", "a", "3")])
+    d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])   # @3 ghosts at slot 2
+    m = d.message(page=0, knob="vol", colors={"a": "ffffff"},
+                  focused="tmux:@1", bells=["tmux:@2"])
+    states = {s["i"]: s["s"] for s in m["slots"]}
+    assert states == {0: "focused", 1: "bell", 2: "ghost"}
+
+
+def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
+    d = km_deck.Deck()
+    d.update([w("tmux:@%d" % i, "a", "%02d" % i) for i in range(20)])
+    m = d.message(page=0, knob="page", colors={"a": "ffffff"}, bells=["tmux:@15"])
+    assert m["bells"] == [15]                  # slot 15 lives on page 1, not shown
+    assert all(s["i"] < 12 for s in m["slots"])
+    assert m["map"] == [12, 8]                 # occupied count per page
+
+
+def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
+    d = km_deck.Deck()
+    d.update([w("tmux:@%d" % i, "mirepoix", "%d a-very-long-window-name" % i)
+              for i in range(12)])
+    m = d.message(page=0, knob="page", colors={"mirepoix": "e16000"},
+                  bells=["tmux:@0"])
+    assert all(len(s["n"]) <= 14 for s in m["slots"])
+    encoded = km_proto.encode(m)
+    assert len(encoded) < 1024, "deck message would be DISCARDED by LineCodec"
+
+
+def test_minimap_geometry_lays_pages_out_left_to_right():
+    boxes = km_deck.minimap_boxes(3)
+    assert boxes == [(1, 38, 15, 20), (20, 38, 15, 20), (39, 38, 15, 20)]
+    assert km_deck.minimap_cell(0, boxes[0]) == (3, 41)
+    assert km_deck.minimap_cell(4, boxes[0]) == (7, 45)      # row 1, col 1
+    assert km_deck.minimap_cell(12, boxes[1]) == (22, 41)    # slot 12 -> page 1, key 0
