@@ -11,6 +11,7 @@ MINIMAP_MAX_PAGES = 5  # Five 15px boxes on a 19px pitch span 92px of the 128px
                        # screen, leaving ~36px for the counts text. A sixth box
                        # cannot be drawn, so bells/map entries beyond this page
                        # count are pointless to send.
+FOCUS_MAX = 21         # OLED screen column count
 
 
 class Deck:
@@ -110,11 +111,20 @@ class Deck:
             page_idx = slot // SLOTS_PER_PAGE
             if page_idx < MINIMAP_MAX_PAGES:
                 masks[page_idx] |= 1 << (slot % SLOTS_PER_PAGE)
+
+        # Composed here from _last rather than from `slots`, because the focused
+        # window may be on a page the user is not looking at -- which is exactly
+        # when naming it is most useful. _last holds every window regardless of
+        # page, so this costs nothing extra.
+        fmeta = self._last.get(focused) if focused else None
+        focus = ("%s %s" % (fmeta["ws"], fmeta["n"]))[:FOCUS_MAX] if fmeta else ""
+
         return {
             "t": "deck", "page": page, "pages": pages,
             "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
             "slots": slots, "map": masks,
             "bells": sorted(s for s in (self.slots[w] for w in bells if w in self.slots) if s < MINIMAP_MAX_PAGES * SLOTS_PER_PAGE),
+            "focus": focus,
         }
 
 

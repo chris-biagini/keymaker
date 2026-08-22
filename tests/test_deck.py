@@ -322,3 +322,27 @@ def test_countdown_text_boundaries():
     assert km_deck.countdown_text(2500) == "RE-KEY IN 1"
     assert km_deck.countdown_text(3499) == "RE-KEY IN 1"
     assert km_deck.countdown_text(3500) == "RE-KEYING"
+
+
+def test_message_carries_the_focused_window_even_when_it_is_off_page():
+    # The focused window is exactly what you want named while you are paging
+    # AWAY from it, so this cannot be derived pad-side from `slots`.
+    d = km_deck.Deck()
+    wins = [{"id": "tmux:@%d" % i, "ws": "ws%d" % i, "n": "%d w" % i}
+            for i in range(14)]
+    d.update(wins)
+    msg = d.message(0, {}, focused="tmux:@13")
+    assert msg["focus"] == "ws13 13 w"
+    assert len(msg["slots"]) == 12                   # page 0 only; @13 is on page 1
+
+
+def test_message_focus_is_blank_when_nothing_is_focused():
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a", "n": "1 sh"}])
+    assert d.message(0, {})["focus"] == ""
+
+
+def test_message_focus_is_trimmed_to_the_screen_width():
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@1", "ws": "a" * 30, "n": "1 " + "b" * 30}])
+    assert len(d.message(0, {}, focused="tmux:@1")["focus"]) <= 21
