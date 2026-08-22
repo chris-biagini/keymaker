@@ -81,19 +81,31 @@ class Cockpit(App):
         d = self.deck
         blink = (now // 450) % 2 == 0
         # len(d["map"]), NOT d["pages"]: km_deck caps `map` at MINIMAP_MAX_PAGES (5)
-        # because only five boxes fit in 128px alongside the counts text, while
-        # `pages` counts every page the KEYS can reach. Passing `pages` would draw
-        # boxes off the right edge of the screen.
+        # because only five boxes fit in the 94px minimap strip alongside the
+        # counts column, while `pages` counts every page the KEYS can reach.
+        # Passing `pages` would draw boxes off the right edge of the strip.
         self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
-        mode = ("PAGE %d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
-        self.screen.set_header("nexus" + " " * (WIDTH_CHARS - 5 - len(mode)) + mode)
+        # Badges carried over from the pre-switchboard header; a separate
+        # ruling in this plan removed the pad's mute *gesture*, so dropping
+        # its indicator too would take away the control and its display in
+        # the same release. Mode is shortened to P1/2 (was PAGE 1/2) to leave
+        # room for badges inside the 21-column header.
+        badges = ""
+        if self.flags["screencast"]:
+            badges += " REC"
+        if self.flags["muted"]:
+            badges += " MUTE"
+        if self.flags["submap"]:
+            badges += " [" + self.flags["submap"] + "]"
+        mode = ("P%d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
+        prefix = "nexus" + badges
+        self.screen.set_header(prefix + " " * max(1, WIDTH_CHARS - len(prefix) - len(mode)) + mode)
         # Attention ledger: what is waiting on you, machine-wide. Blank lines
         # mean all clear -- a glanceable state in itself, and it reads across a
         # locked screen because the pad is a display hyprlock cannot cover.
         claudes = self.ledger.get("claudes", [])
         bells = self.ledger.get("bells", [])
         waiting = [c for c in claudes if not c.get("busy")]
-        busy = len(claudes) - len(waiting)
         if waiting:
             text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
             self.screen.line1.text = marquee("* " + text, WIDTH_CHARS, now)
@@ -104,7 +116,13 @@ class Cockpit(App):
             self.screen.line2.text = marquee("! " + text, WIDTH_CHARS, now)
         else:
             self.screen.line2.text = ""
-        self.screen.footer.text = (str(busy) + " working") if busy else ""
+        # Minimap counts column (spec 8.2): total occupied slots on the pages
+        # the minimap can draw, plus how many unacked bells are on a page that
+        # isn't the one currently on the keys -- the number the blinking cell
+        # alone can't convey once it's off-page.
+        total = sum(d["map"])
+        off_page = sum(1 for g in d["bells"] if g // 12 != d["page"])
+        self.screen.footer.text = ("%d+%d!" % (total, off_page))[:5] if off_page else str(total)[:5]
 
     def _draw_all(self, now):
         self._draw_leds(now)

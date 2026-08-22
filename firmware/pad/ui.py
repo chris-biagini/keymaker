@@ -1,4 +1,5 @@
-"""OLED layout: inverted header / two body lines / footer + idle card."""
+"""OLED layout: inverted header / two body lines / minimap strip with a
+right-hand counts column / idle card."""
 import displayio
 import terminalio
 from adafruit_display_text import label
@@ -11,18 +12,23 @@ class Screen:
         self.group = displayio.Group()
         self.header = label.Label(terminalio.FONT, text="", x=0, y=6,
                                   color=0x000000, background_color=0xFFFFFF)
-        self.line1 = label.Label(terminalio.FONT, text="", x=0, y=26)
-        self.line2 = label.Label(terminalio.FONT, text="", x=0, y=42)
-        self.footer = label.Label(terminalio.FONT, text="", x=0, y=58)
+        self.line1 = label.Label(terminalio.FONT, text="", x=0, y=20)
+        self.line2 = label.Label(terminalio.FONT, text="", x=0, y=32)
+        # Repurposed as the right-hand minimap counts column (see set_minimap
+        # callers) now that the minimap owns its own strip below line2.
+        self.footer = label.Label(terminalio.FONT, text="", x=96, y=52)
         for l in (self.header, self.line1, self.line2, self.footer):
             self.group.append(l)
-        # 128x64 mono. A Bitmap is the cheapest surface for per-pixel work; the
-        # existing labels stay as labels.
-        self.map_bmp = displayio.Bitmap(128, 22, 2)
+        # 94x22 mono, clear of the footer's counts column at x=96. A Bitmap is
+        # the cheapest surface for per-pixel work; the existing labels stay as
+        # labels. TileGrid at y=40 puts its rows at 40-61: below line2 (rows
+        # ~26-34 per the y-6..y+2 glyph band terminalio labels occupy) and
+        # inside the 64px panel.
+        self.map_bmp = displayio.Bitmap(94, 22, 2)
         pal = displayio.Palette(2)
         pal[0] = 0x000000
         pal[1] = 0xFFFFFF
-        self.map_tile = displayio.TileGrid(self.map_bmp, pixel_shader=pal, x=0, y=38)
+        self.map_tile = displayio.TileGrid(self.map_bmp, pixel_shader=pal, x=0, y=40)
         self.group.append(self.map_tile)
         display.root_group = self.group
 
