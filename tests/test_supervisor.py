@@ -512,3 +512,17 @@ def test_rekey_clears_slots_and_ghosts_and_re_derives_in_order(tmp_path):
     sup.on_rekey()
     assert sup.deck.slots == {"tmux:@1": 0, "tmux:@9": 1}
     assert sup.deck.ghosts == {}
+
+
+def test_rekey_before_first_poll_does_not_wipe_the_restored_board(tmp_path):
+    # Before the first _poll_deck lands, _deck_wins is []. Without the guard,
+    # on_rekey would call deck.update([]), wiping every slot restored from
+    # disk on startup, and then PERSIST that empty board to deck-slots.json --
+    # destroying it, not just showing it wrong until the next poll.
+    sup = _supervisor(tmp_path)
+    sup.deck.slots = {"tmux:@9": 0, "tmux:@1": 1}
+    sup.deck.ghosts = {5: {"ws": "gone", "n": "1 old"}}
+    assert sup._deck_wins == []
+    sup.on_rekey()
+    assert sup.deck.slots == {"tmux:@9": 0, "tmux:@1": 1}
+    assert sup.deck.ghosts == {5: {"ws": "gone", "n": "1 old"}}

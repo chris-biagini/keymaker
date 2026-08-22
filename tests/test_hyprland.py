@@ -335,3 +335,17 @@ def test_deck_windows_rejects_a_bool_workspace_id():
     ]
     got = hyprland.deck_windows([], clients)
     assert [w["n"] for w in got] == ["real", "boolish"]
+
+
+def test_deck_windows_survives_a_null_workspace():
+    # Hyprland can send "workspace": null. _ws_sort_id guards for exactly this,
+    # but the sibling `.get("name", "")` call used to run on the unguarded
+    # object -- an AttributeError there freezes the deck via _poll_deck's broad
+    # except. It should still earn a slot, sorted last.
+    clients = [
+        {"address": "0xc", "class": "foot", "workspace": None, "title": "null-ws"},
+        {"address": "0xd", "class": "foot", "workspace": {"id": 2, "name": "y"},
+         "title": "real"},
+    ]
+    got = hyprland.deck_windows([], clients)
+    assert [w["n"] for w in got] == ["real", "null-ws"]

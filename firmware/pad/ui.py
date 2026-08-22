@@ -21,16 +21,25 @@ class Screen:
         # Rows are 10px apart, matching km_deck.GUTTER_PITCH_Y.
         self.rows = [label.Label(terminalio.FONT, text="", x=5, y=29 + i * 10)
                      for i in range(km_deck.LEGEND_ROWS)]
-        self.group.append(self.header)
-        self.group.append(self.focus)
-        for r in self.rows:
-            self.group.append(r)
         self.map_bmp = displayio.Bitmap(128, MAP_H, 2)
         pal = displayio.Palette(2)
         pal[0] = 0x000000
         pal[1] = 0xFFFFFF
+        # Index 0 must be transparent, and this TileGrid must be appended
+        # BEFORE the legend labels below. The bitmap's rows (23-61) are
+        # exactly the legend rows (5.1), so layering here is load-bearing: a
+        # Group draws children in append order, later on top, and an opaque
+        # palette entry would paint a 128x39 black rectangle over all four
+        # legend rows -- the whole screen's content. The previous layout (a
+        # 94x22 bitmap at y=40) was immune to this by accident, since it sat
+        # clear of every label and opacity never mattered.
+        pal.make_transparent(0)
+        self.group.append(self.header)
+        self.group.append(self.focus)
         self.group.append(displayio.TileGrid(self.map_bmp, pixel_shader=pal,
                                              x=0, y=MAP_Y))
+        for r in self.rows:
+            self.group.append(r)
         # Lit pixels currently on the bitmap, so set_gutters can paint the
         # difference rather than clear and repaint. See km_deck.gutter_pixels.
         self._lit = set()

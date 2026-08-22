@@ -18,7 +18,7 @@ class Cockpit(App):
 
     def __init__(self):
         self.deck = {"t": "deck", "page": 0, "pages": 1, "total": 0, "focus": "",
-                     "ws": [], "slots": [], "map": [0], "bells": []}
+                     "ws": [], "slots": []}
         self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
@@ -38,6 +38,15 @@ class Cockpit(App):
         # never in on_show -- a hold in progress must not survive a repaint.
         self._countdown = None
         self._enc_down = None
+        # Latches "idle_card has already been painted this outage" so
+        # _draw_text's no-link branch writes it once per outage rather than
+        # every tick of the `while True:` main loop -- Label.text has no
+        # equality short-circuit, so an unconditional write rebuilds six
+        # labels' glyph TileGrids on every pass and pins panel refresh. Set
+        # False here (not on_show) so a repaint never re-arms a stale idle
+        # write, and reset to False the instant the link comes back up so
+        # recovery still repaints.
+        self._idle = False
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
@@ -93,7 +102,7 @@ class Cockpit(App):
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})
         self._draw_leds(now)          # every pass: urgent pulse animation
-        self._draw_text(now)          # minimap blink needs time too
+        self._draw_text(now)          # every pass: gutter blink needs time too
 
     # ---- drawing --------------------------------------------------
     def _draw_leds(self, now):
@@ -117,13 +126,20 @@ class Cockpit(App):
 
     def _draw_text(self, now):
         if not self.link.up:
-            self.screen.idle_card()
-            # idle_card writes header/focus/legend/gutters directly, bypassing
-            # the caches below; invalidate them so link recovery forces a full
-            # repaint instead of comparing against what idle_card left on screen.
-            self._header_text = self._focus_text = None
-            self._legend = None
+            # idle_card() rebuilds six labels' glyph TileGrids on every call, so
+            # it must only run once per outage, not every tick -- see the
+            # _idle latch set up in __init__.
+            if not self._idle:
+                self.screen.idle_card()
+                # idle_card writes header/focus/legend/gutters directly,
+                # bypassing the caches below; invalidate them so link recovery
+                # forces a full repaint instead of comparing against what
+                # idle_card left on screen.
+                self._header_text = self._focus_text = None
+                self._legend = None
+                self._idle = True
             return
+        self._idle = False
         d = self.deck
         blink = (now // 450) % 2 == 0
 

@@ -143,7 +143,15 @@ class Supervisor:
         against a slot that no longer means the same thing is worse than a lost
         one. No service restart -- clearing deck-slots.json by hand and bouncing
         the unit was only ever a way to reach this state.
+
+        A no-op before the first poll has landed: self._deck_wins would be []
+        (mirrors _resend_deck's own guard on _deck_render_args), and updating
+        against an empty window list would wipe every slot restored from disk
+        AND persist that empty board to deck-slots.json -- destroying it, not
+        just displaying it wrong until the next poll.
         """
+        if not self._deck_wins:
+            return
         self.deck.slots = {}
         self.deck.ghosts = {}
         self.deck.update(self._deck_wins)

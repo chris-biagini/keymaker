@@ -275,7 +275,8 @@ same thing would be worse than losing them.
 Sent at top level rather than derived pad-side from the focused slot, because the
 focused window may be on a page the user is not viewing; deriving it from `slots`
 would blank the row exactly when it is most wanted. Cost is roughly 25 bytes
-against `LineCodec`'s 2048-byte cap, whose measured worst case is ~1028 bytes.
+against `LineCodec`'s 2048-byte cap, whose worst case is 982 bytes, measured by
+`tests/test_deck.py::test_message_worst_case_wire_size_is_under_the_codec_cap`.
 
 It is composed inside `Deck.message` from `Deck._last`, which already holds every
 window's metadata regardless of page — so no daemon-side plumbing is needed and

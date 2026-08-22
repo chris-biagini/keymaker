@@ -46,10 +46,19 @@ if ! touch "$MP/.deploy-probe" 2>/dev/null; then
 fi
 rm -f "$MP/.deploy-probe"
 
-# 'P km_*.py' protects the shared modules (copied below) from --delete
+# 'P km_*.py' protects the shared modules (synced below) from --delete: they
+# don't live under firmware/, so without protection this pass would see them
+# as absent from the source and delete them before the next line gets a
+# chance to put them back.
 rsync -r --delete --filter='P km_*.py' --exclude backup-factory \
     --exclude __pycache__ firmware/ "$MP"/
-cp shared/km_*.py "$MP/lib/" 2>/dev/null || true
+# A plain `cp` here only ever ADDS or updates files -- it can't remove a
+# shared module that was deleted from shared/, so a retired km_*.py (e.g.
+# km_coach.py) would survive on CIRCUITPY forever. Scope --delete to exactly
+# the km_*.py pattern so this pass only ever touches the files it owns and
+# leaves the rest of lib/ (the third-party adafruit_* packages) alone.
+rsync -r --delete --include='km_*.py' --exclude='*' \
+    --exclude __pycache__ shared/ "$MP/lib/"
 sync
 
 if [ "$repl_ok" = 1 ]; then
