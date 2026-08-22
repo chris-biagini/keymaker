@@ -5,10 +5,24 @@ from pathlib import Path
 
 import pytest
 
+import km_deck
 import km_proto
 from keymakerd.__main__ import Config, Supervisor
 
 WORKSPACES = [{"id": 1, "windows": 1}, {"id": 3, "windows": 2}]
+
+
+def _supervisor(tmp_path):
+    """A Supervisor with no live link, for testing deck/knob/tap logic synchronously.
+
+    SerialLink.__init__ only stores its path (serial_link.py:11-18) and send() no-ops
+    while disconnected, so the device never has to exist. The async tests below build
+    their own Supervisor against a real pty because they exercise the link itself;
+    this one deliberately does not.
+    """
+    cfg = Config(device=str(tmp_path / "no-such-device"), runtime_dir=tmp_path,
+                 home=tmp_path, state_dir=tmp_path)
+    return Supervisor(cfg)
 
 
 class FakeHypr:
@@ -64,6 +78,11 @@ def _read_msgs(master):
 
 
 def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
+    # The old split deck read n<6 as a raw workspace switch; the switchboard
+    # supersedes that (docs/superpowers/specs/2026-08-22-macropad-switchboard-
+    # design.md § 1) -- every key is a deck slot now, and a tap on an empty
+    # slot (nothing is running under FakeHypr) or a hold (reserved, spec § 10)
+    # must dispatch nothing.
     master, slave_path = pad
 
     async def scenario():
@@ -75,7 +94,6 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
         task = asyncio.create_task(sup.run())
         await asyncio.sleep(0.4)
         msgs = _read_msgs(master)
-        # pad presses key 2 (0-based) → workspace 3, then holds key 0 → move to ws 1
         os.write(master, km_proto.encode({"t": "key", "n": 2, "act": "tap"}))
         os.write(master, km_proto.encode({"t": "key", "n": 0, "act": "hold"}))
         await asyncio.sleep(0.3)
@@ -90,8 +108,8 @@ def test_snapshot_on_connect_and_key_dispatch(pad, tmp_path):
     # FIRST ws msg is the default state; the refreshed one arrives last.
     ws = [m for m in msgs if m["t"] == "ws"][-1]
     assert ws == {"t": "ws", "active": 3, "occupied": [1, 3], "urgent": [], "colors": {}, "names": {}}
-    assert "dispatch workspace 3" in dispatched
-    assert "dispatch movetoworkspacesilent 1" in dispatched
+    assert not any(d.startswith("dispatch workspace") for d in dispatched)
+    assert not any(d.startswith("dispatch movetoworkspacesilent") for d in dispatched)
 
 
 def test_link_up_reports_current_mute_state(monkeypatch, tmp_path):
@@ -272,7 +290,10 @@ def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_
     assert ctx[0]["items"][0]["name"] == "vim"
 
 
-def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
+def test_deck_tap_selects_tmux_window(monkeypatch, tmp_path):
+    # Supersedes the old split-deck's ctx-based bottom-half key select (spec
+    # § 1): every key is now a deck slot, resolved through self._deck_twins
+    # (populated by the deck poll -- see _poll_deck) rather than self.ctx.
     from keymakerd import tmux as tmuxmod
     selected = []
 
@@ -285,21 +306,24 @@ def test_bottom_half_key_selects_tmux_window(monkeypatch, tmp_path):
         cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
         sup = Supervisor(cfg)
         sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
-        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": [], "addr": None}
-        sup._on_pad_msg({"t": "key", "n": 6, "act": "tap"})    # slot 1
-        sup._on_pad_msg({"t": "key", "n": 11, "act": "tap"})   # slot 6
-        sup._on_pad_msg({"t": "key", "n": 7, "act": "hold"})   # reserved: no-op
-        sup.ctx = {"t": "ctx", "mode": "none", "session": None, "items": [], "addr": None}
-        sup._on_pad_msg({"t": "key", "n": 8, "act": "tap"})    # mode none: ignored
-        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "mirepoix", "items": [], "addr": None}
-        sup._on_pad_msg({"t": "key", "n": 13, "act": "tap"})   # out of range: ignored
+        sup.deck.slots = {"tmux:@1": 0, "tmux:@2": 5}
+        sup._deck_twins = {
+            "tmux:@1": {"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
+                        "active": False, "bell": False},
+            "tmux:@2": {"id": "tmux:@2", "s": "mirepoix", "i": 6, "n": "tests",
+                        "active": False, "bell": False},
+        }
+        sup._on_pad_msg({"t": "key", "n": 0, "act": "tap"})    # slot 0
+        sup._on_pad_msg({"t": "key", "n": 5, "act": "tap"})    # slot 5
+        sup._on_pad_msg({"t": "key", "n": 1, "act": "hold"})   # reserved: no-op
+        sup._on_pad_msg({"t": "key", "n": 3, "act": "tap"})    # empty slot: no-op
         await asyncio.sleep(0.05)
         return selected
 
     assert asyncio.run(scenario()) == [("mirepoix", 1), ("mirepoix", 6)]
 
 
-def test_tap_focuses_foot_window_first_when_unfocused(monkeypatch, tmp_path):
+def test_deck_tap_focuses_client_first_when_unfocused(monkeypatch, tmp_path):
     from keymakerd import tmux as tmuxmod
     calls = []
 
@@ -316,15 +340,21 @@ def test_tap_focuses_foot_window_first_when_unfocused(monkeypatch, tmp_path):
         sup = Supervisor(cfg)
         sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
         sup._dispatch = fake_dispatch
-        sup.ctx = {"t": "ctx", "mode": "tmux", "session": "oracle",
-                   "items": [], "addr": "0xfeet"}
+        sup.deck.slots = {"tmux:@1": 0, "tmux:@2": 1}
+        sup._deck_twins = {
+            "tmux:@1": {"id": "tmux:@1", "s": "oracle", "i": 1, "n": "rails",
+                        "active": False, "bell": False},
+            "tmux:@2": {"id": "tmux:@2", "s": "oracle", "i": 2, "n": "logs",
+                        "active": False, "bell": False},
+        }
+        sup._deck_ws_addr = {"oracle": "0xfeet"}
         sup.state.addr = "0xffox"                 # firefox holds focus
-        sup._on_pad_msg({"t": "key", "n": 6, "act": "tap"})
+        sup._on_pad_msg({"t": "key", "n": 0, "act": "tap"})
         await asyncio.sleep(0.05)
         first = list(calls)
         calls.clear()
         sup.state.addr = "0xfeet"                 # foot already focused
-        sup._on_pad_msg({"t": "key", "n": 7, "act": "tap"})
+        sup._on_pad_msg({"t": "key", "n": 1, "act": "tap"})
         await asyncio.sleep(0.05)
         return first, list(calls)
 
@@ -463,3 +493,61 @@ def test_dispatch_oserror_keeps_instance(tmp_path):
         await sup._dispatch("dispatch workspace 2")
         assert sup._instance is dead           # still set; owner heals it
     asyncio.run(scenario())
+
+
+def test_deck_message_is_emitted_from_live_state(tmp_path, monkeypatch):
+    from keymakerd import __main__ as main_mod
+    sup = _supervisor(tmp_path)                 # existing helper in this file
+    sup.deck.update([{"id": "tmux:@1", "ws": "mirepoix", "n": "1 rails"}])
+    msg = sup._deck_msg({"mirepoix": "e16000"}, focused="tmux:@1", bells=set())
+    assert msg["t"] == "deck"
+    assert msg["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "focused"}]
+
+
+def test_knob_press_toggles_mode_and_rotation_only_pages_in_page_mode(tmp_path):
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
+    assert sup.knob_mode == "vol"
+    sup.on_knob_press()
+    assert sup.knob_mode == "page"
+    sup.on_knob_turn(1)
+    assert sup.deck_page == 1
+    sup.on_knob_press()                          # back to volume
+    sup.on_knob_turn(1)
+    assert sup.deck_page == 1                    # rotation no longer pages
+
+
+def test_paging_wraps_and_never_lands_on_a_page_that_does_not_exist(tmp_path):
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
+    sup.knob_mode = "page"
+    sup.on_knob_turn(-1)
+    assert sup.deck_page == 1                    # wrapped backwards
+    sup.on_knob_turn(1)
+    assert sup.deck_page == 0
+
+
+def test_a_bell_on_another_page_never_changes_the_page(tmp_path):
+    # Spec section 7.3: auto-jumping would move the keys under your fingers in
+    # response to something you did not do.
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(20)])
+    sup.deck_page = 0
+    sup._deck_msg({"a": "ffffff"}, focused=None, bells={"tmux:@15"})
+    assert sup.deck_page == 0
+
+
+def test_tapping_a_ghost_dismisses_it_and_launches_nothing(tmp_path):
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@1", "ws": "a", "n": "1 x"}])
+    sup.deck.update([])                          # slot 0 ghosts
+    assert sup.on_tap(0) == "dismissed"
+    assert sup.deck.ghosts == {}
+
+
+def test_slots_persist_across_a_supervisor_restart(tmp_path):
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@7", "ws": "a", "n": "1 x"}])
+    sup.save_deck()
+    again = _supervisor(tmp_path)
+    assert again.deck.slots == {"tmux:@7": 0}

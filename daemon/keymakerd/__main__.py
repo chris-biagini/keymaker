@@ -3,12 +3,14 @@ import asyncio
 import json
 import os
 
+import km_deck
 import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import hyprland, ledtest, tmux, volume
 from .coach_store import CoachStore
+from .deck_store import DeckStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher, resolve_theme_dir
 
@@ -71,6 +73,18 @@ class Supervisor:
         self.ctx = _ctx_none()
         self.ledger = _ledger_none()
         self.coach = CoachStore(cfg.state_dir / "coach.json")
+        self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
+        self.deck = km_deck.Deck(self.deck_store.load())
+        self.knob_mode = "vol"      # short-press toggles; rotation is volume first
+        self.deck_page = 0
+        self.deck_msg = None
+        # Cache of the deck poll's tmux windows, keyed by id ("tmux:@N"), and of
+        # session -> ws-* client address -- both needed at tap time to focus a
+        # window, but only cheaply available inside the poll that already fetched
+        # them. Empty until the first deck poll lands, so an early tap is a no-op
+        # rather than a KeyError.
+        self._deck_twins = {}
+        self._deck_ws_addr = {}
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
@@ -124,6 +138,82 @@ class Supervisor:
             self.state.light = light
             self._refresh_wanted.set()
 
+    # ---- deck -------------------------------------------------------
+    def save_deck(self):
+        self.deck_store.save(self.deck.slots)
+
+    def _deck_msg(self, colors, focused, bells):
+        # Clamp rather than trust: windows closing can shrink the page count out
+        # from under a page the knob already selected.
+        self.deck_page = min(self.deck_page, self.deck.page_count() - 1)
+        return self.deck.message(self.deck_page, self.knob_mode, colors,
+                                 focused=focused, bells=bells)
+
+    def on_knob_press(self):
+        self.knob_mode = "page" if self.knob_mode == "vol" else "vol"
+
+    def on_knob_turn(self, delta):
+        if self.knob_mode != "page":
+            return                      # volume is handled by the existing path
+        pages = self.deck.page_count()
+        self.deck_page = (self.deck_page + delta + pages) % pages
+
+    def on_tap(self, slot):
+        """Key press on the current page. Returns what happened, for tests."""
+        gslot = self.deck_page * km_deck.SLOTS_PER_PAGE + slot
+        if self.deck.dismiss(gslot):
+            self.save_deck()
+            return "dismissed"
+        for wid, s in self.deck.slots.items():
+            if s == gslot:
+                return wid              # caller focuses it; see _focus_deck_window
+        return None
+
+    def _focused_window_id(self, twins):
+        """The id (see km_deck) of the window that currently holds focus, or None.
+
+        A tmux window counts as focused when its session is the ws-* client
+        living on the active workspace AND tmux itself reports it active --
+        matching deck_windows' notion of "the window you'd land in" rather than
+        Hyprland's, since the ws-* terminal can hold Hyprland focus while any of
+        its tmux windows is the one actually on screen. Falls back to the plain
+        Hyprland-focused client id (covers sessionless terminals and the case
+        where the focused client isn't a ws-* terminal at all).
+        """
+        client = self.state.fg.get(self.state.active)
+        if client is not None:
+            session = client["cls"].removeprefix("ws-")
+            for w in twins:
+                if w["s"] == session and w["active"]:
+                    return w["id"]
+        if self.state.addr:
+            return "hypr:" + self.state.addr
+        return None
+
+    async def _focus_deck_window(self, wid):
+        """Focus a window returned by on_tap. Mirrors _activate_window's shape:
+        bring the right Hyprland client forward first (a no-op if it's already
+        focused), then select the tmux window inside it."""
+        if wid.startswith("tmux:"):
+            twin = self._deck_twins.get(wid)
+            if twin is None:
+                return
+            addr = self._deck_ws_addr.get(twin["s"])
+            if addr and addr != self.state.addr:
+                await self._dispatch(f"dispatch focuswindow address:{addr}")
+            if not await tmux.select_window(twin["s"], twin["i"]):
+                print(f"keymakerd: deck select-window {twin['s']}:{twin['i']} failed",
+                      flush=True)
+        elif wid.startswith("hypr:"):
+            addr = wid.removeprefix("hypr:")
+            if addr != self.state.addr:
+                await self._dispatch(f"dispatch focuswindow address:{addr}")
+
+    async def _on_tap(self, slot):
+        result = self.on_tap(slot)
+        if result and result != "dismissed":
+            await self._focus_deck_window(result)
+
     # ---- inbound from pad -----------------------------------------
     def _on_pad_msg(self, msg):
         t = msg.get("t")
@@ -131,17 +221,16 @@ class Supervisor:
             self._spawn(self._on_link_up(), "link-up")
         elif t == "key":
             n = int(msg.get("n", 0))
-            if n < 6:                                     # top half: workspaces 1-6
-                verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
-                if verb != "workspace":                   # holds are rare and destructive; log for forensics
-                    print(f"keymakerd: hold key {n} -> {verb} {n + 1}", flush=True)
-                self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
-            elif 6 <= n <= 11 and msg.get("act") == "tap" and self.ctx["mode"] == "tmux":
-                self._spawn(self._activate_window(dict(self.ctx), n - 5), "tmux-activate")
+            if msg.get("act") == "tap":                   # hold is reserved: no-op
+                self._spawn(self._on_tap(n), "deck-tap")
         elif t == "dial":
-            self._spawn(self._volume(int(msg.get("d", 0)), False), "volume")
+            d = int(msg.get("d", 0))
+            if self.knob_mode == "page":
+                self.on_knob_turn(d)
+            else:
+                self._spawn(self._volume(d, False), "volume")
         elif t == "click":
-            self._spawn(self._volume(0, True), "volume")
+            self.on_knob_press()
         elif t == "coach":
             self._spawn(self._coach_session(msg.get("session")), "coach")
 
@@ -157,16 +246,9 @@ class Supervisor:
             except OSError as e:
                 print(f"keymakerd: dispatch failed ({e!r}): {cmd}", flush=True)
 
-    async def _activate_window(self, ctx, i):
-        """Tap on a bottom key: focus the workspace's foot window if it isn't
-        focused (the deck is workspace-aware, not focus-gated), then select the
-        tmux window. ctx is a snapshot taken at tap time so a poll racing this
-        coroutine cannot swap the target under it."""
-        addr = ctx.get("addr")
-        if addr and addr != self.state.addr:
-            await self._dispatch(f"dispatch focuswindow address:{addr}")
-        if not await tmux.select_window(ctx["session"], i):
-            print(f"keymakerd: select-window {ctx['session']}:{i} failed", flush=True)
+    # `_activate_window` (the old ctx-based bottom-half tap handler) is retired:
+    # `_focus_deck_window` below does the same job -- focus the client, then
+    # select-window -- against deck slots instead of ctx's fixed 6-11 range.
 
     async def _volume(self, direction, toggle):
         try:
@@ -239,10 +321,11 @@ class Supervisor:
             self.link.send({"t": "ping"})
 
     async def _context(self):
-        # The deck is WORKSPACE-aware, not focus-gated: keys 6-11 track the
-        # ws-attach window living on the active workspace whether or not it holds
-        # focus, so the bottom half stays lit while you're in the browser next to
-        # it. Workspaces with no ws-attach window still cost nothing (no poll).
+        # `ctx` here is the OLD split-deck context message, superseded by `deck`
+        # (see docs/superpowers/specs/2026-08-22-macropad-switchboard-design.md).
+        # Left running rather than deleted: cockpit.py (Task 9) hasn't switched to
+        # `deck` rendering yet, and untangling this from `_poll_ledger` below is a
+        # separate cleanup once nothing consumes it, not this task's job.
         while True:
             await asyncio.sleep(CTX_POLL_S)
             client = self.state.fg.get(self.state.active)
@@ -267,7 +350,33 @@ class Supervisor:
             if new != self.ctx:
                 self.ctx = new
                 self.link.send(new)
+            await self._poll_deck()
             await self._poll_ledger()
+
+    async def _poll_deck(self):
+        try:
+            twins = await tmux.list_deck_windows()
+            if twins is None:
+                return
+            self._deck_twins = {w["id"]: w for w in twins}
+            self._deck_ws_addr = {
+                str(c.get("class", ""))[3:]: str(c.get("address", ""))
+                for c in self.state.clients if str(c.get("class", "")).startswith("ws-")
+            }
+            wins = hyprland.deck_windows(twins, self.state.clients, self.state.workspaces)
+            before = dict(self.deck.slots)
+            self.deck.update(wins)
+            if self.deck.slots != before:
+                self.save_deck()
+            colors = hyprland.deck_colors(wins)
+            bells = hyprland.deck_bells(twins, self.state._urgent_addrs, self.state.clients)
+            focused = self._focused_window_id(twins)
+            msg = self._deck_msg(colors, focused, bells)
+            if msg != self.deck_msg:
+                self.deck_msg = msg
+                self.link.send(msg)
+        except Exception as e:
+            print(f"keymakerd: deck poll failed: {e!r}", flush=True)
 
     async def _poll_ledger(self):
         # Global on purpose -- the ledger is the "what's waiting on me" surface

@@ -150,6 +150,11 @@ class HyprState:
         self.submap = ""
         self.screencast = False
         self._urgent_addrs = set()
+        # Raw IPC snapshots, retained for the deck poll (hyprland.deck_windows /
+        # deck_bells need both). Initialised empty so a deck poll firing before
+        # the first refresh cannot raise.
+        self.clients = []
+        self.workspaces = []
 
     def handle_event(self, name, data):
         """Returns (needs_refresh, flags_changed)."""
@@ -172,6 +177,8 @@ class HyprState:
 
     def refresh(self, workspaces, active_ws, active_win, clients):
         msgs = []
+        self.clients = clients
+        self.workspaces = workspaces
         active = active_ws.get("id", 1)
         occupied = sorted(w["id"] for w in workspaces if w.get("windows", 0) > 0)
         addr_ws = {
