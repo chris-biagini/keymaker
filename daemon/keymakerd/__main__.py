@@ -85,6 +85,11 @@ class Supervisor:
         # rather than a KeyError.
         self._deck_twins = {}
         self._deck_ws_addr = {}
+        # Last (colors, focused, bells) _poll_deck computed, so a knob gesture can
+        # re-render the deck message SYNCHRONOUSLY instead of waiting up to
+        # CTX_POLL_S for the next poll -- a knob that takes a second to respond
+        # reads as a broken control. None until the first poll lands.
+        self._deck_render_args = None
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg, on_up=self._on_link_up)
         self._refresh_wanted = asyncio.Event()
         self._instance = None
@@ -149,17 +154,36 @@ class Supervisor:
         return self.deck.message(self.deck_page, self.knob_mode, colors,
                                  focused=focused, bells=bells)
 
+    def _resend_deck(self):
+        """Re-render and (if changed) send the deck message immediately, from the
+        last (colors, focused, bells) _poll_deck computed. Called by the knob
+        handlers so a mode toggle or a page change doesn't wait up to
+        CTX_POLL_S for the next poll to reach the pad -- a knob that takes a
+        second to respond reads as a broken control. A no-op before the first
+        poll has landed (nothing to render yet, and no live windows to lose)."""
+        if self._deck_render_args is None:
+            return
+        colors, focused, bells = self._deck_render_args
+        msg = self._deck_msg(colors, focused, bells)
+        if msg != self.deck_msg:
+            self.deck_msg = msg
+            self.link.send(msg)
+
     def on_knob_press(self):
         self.knob_mode = "page" if self.knob_mode == "vol" else "vol"
+        self._resend_deck()
 
     def on_knob_turn(self, delta):
         if self.knob_mode != "page":
             return                      # volume is handled by the existing path
         pages = self.deck.page_count()
         self.deck_page = (self.deck_page + delta + pages) % pages
+        self._resend_deck()
 
     def on_tap(self, slot):
         """Key press on the current page. Returns what happened, for tests."""
+        if not 0 <= slot < km_deck.SLOTS_PER_PAGE:
+            return None          # the pad has 12 keys; anything else is a bad frame
         gslot = self.deck_page * km_deck.SLOTS_PER_PAGE + slot
         if self.deck.dismiss(gslot):
             self.save_deck()
@@ -371,6 +395,7 @@ class Supervisor:
             colors = hyprland.deck_colors(wins)
             bells = hyprland.deck_bells(twins, self.state._urgent_addrs, self.state.clients)
             focused = self._focused_window_id(twins)
+            self._deck_render_args = (colors, focused, bells)
             msg = self._deck_msg(colors, focused, bells)
             if msg != self.deck_msg:
                 self.deck_msg = msg

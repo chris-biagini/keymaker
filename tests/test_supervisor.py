@@ -144,7 +144,8 @@ def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
     async def scenario():
         monkeypatch.setattr(vol, "toggle_mute", boom)
         monkeypatch.setattr(vol, "status", boom)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -156,7 +157,16 @@ def test_volume_failure_still_sends_flags(monkeypatch, tmp_path):
 
 
 def _quiet_ledger(monkeypatch):
-    """Keep _poll_ledger off the real tmux server during ctx tests."""
+    """Keep _poll_ledger AND _poll_deck off the real tmux server during ctx tests.
+
+    _context() calls both every cycle. Left unstubbed, list_deck_windows hits the
+    live tmux server, and -- combined with a Config that also defaults state_dir
+    (see the state_dir=tmp_path audit below) -- deck.update() reconciles against
+    whatever real windows come back, decides the (usually empty state.clients)
+    map has shrunk, and save_deck() overwrites the real
+    ~/.local/state/keymaker/deck-slots.json. That is the exact file sticky
+    allocation exists to protect, from a plain `pytest` run.
+    """
     from keymakerd import tmux as tmuxmod
 
     async def none(*a, **k):
@@ -164,6 +174,7 @@ def _quiet_ledger(monkeypatch):
 
     monkeypatch.setattr(tmuxmod, "list_bells", none)
     monkeypatch.setattr(tmuxmod, "list_claude_panes", none)
+    monkeypatch.setattr(tmuxmod, "list_deck_windows", none)
 
 
 def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
@@ -177,7 +188,8 @@ def test_context_watcher_state_shaped_emission(monkeypatch, tmp_path):
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", fake_list)
         _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -215,7 +227,8 @@ def test_context_watcher_filters_slots_and_degrades(monkeypatch, tmp_path):
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", lister)
         _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -242,7 +255,8 @@ def test_context_watcher_survives_lister_exception(monkeypatch, tmp_path):
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", boom)
         _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -272,7 +286,8 @@ def test_context_watcher_falls_back_to_workspace_label_session(monkeypatch, tmp_
         monkeypatch.setattr(main_mod, "CTX_POLL_S", 0.05)
         monkeypatch.setattr(tmuxmod, "list_windows", lister)
         _quiet_ledger(monkeypatch)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -303,20 +318,28 @@ def test_deck_tap_selects_tmux_window(monkeypatch, tmp_path):
 
     async def scenario():
         monkeypatch.setattr(tmuxmod, "select_window", fake_select)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
-        sup.deck.slots = {"tmux:@1": 0, "tmux:@2": 5}
+        # tmux:@3 sits at GLOBAL slot 13 (page 1, key 1) -- present specifically
+        # so an unbounded on_tap(13) on page 0 would wrongly resolve to it.
+        sup.deck.slots = {"tmux:@1": 0, "tmux:@2": 5, "tmux:@3": 13}
         sup._deck_twins = {
             "tmux:@1": {"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
                         "active": False, "bell": False},
             "tmux:@2": {"id": "tmux:@2", "s": "mirepoix", "i": 6, "n": "tests",
+                        "active": False, "bell": False},
+            "tmux:@3": {"id": "tmux:@3", "s": "mirepoix", "i": 9, "n": "logs",
                         "active": False, "bell": False},
         }
         sup._on_pad_msg({"t": "key", "n": 0, "act": "tap"})    # slot 0
         sup._on_pad_msg({"t": "key", "n": 5, "act": "tap"})    # slot 5
         sup._on_pad_msg({"t": "key", "n": 1, "act": "hold"})   # reserved: no-op
         sup._on_pad_msg({"t": "key", "n": 3, "act": "tap"})    # empty slot: no-op
+        sup._on_pad_msg({"t": "key", "n": 13, "act": "tap"})   # out of range: must NOT
+                                                                # reach tmux:@3's slot
+        sup._on_pad_msg({"t": "key", "n": -1, "act": "tap"})   # negative: ignored
         await asyncio.sleep(0.05)
         return selected
 
@@ -336,7 +359,8 @@ def test_deck_tap_focuses_client_first_when_unfocused(monkeypatch, tmp_path):
 
     async def scenario():
         monkeypatch.setattr(tmuxmod, "select_window", fake_select)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
         sup._dispatch = fake_dispatch
@@ -385,7 +409,8 @@ def test_ledger_emission_is_state_shaped_sorted_and_capped(monkeypatch, tmp_path
     async def scenario():
         monkeypatch.setattr(tmuxmod, "list_bells", fake_bells)
         monkeypatch.setattr(tmuxmod, "list_claude_panes", fake_panes)
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         sent = []
         sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
@@ -486,7 +511,8 @@ def test_dispatch_oserror_keeps_instance(tmp_path):
     # killed the refresher (observed live 2026-08-18: frozen ws colors,
     # zero request-socket connects while events flowed).
     async def scenario():
-        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
         sup = Supervisor(cfg)
         dead = tmp_path / "hypr" / "gone"      # no .socket.sock -> OSError
         sup._instance = dead
@@ -551,3 +577,118 @@ def test_slots_persist_across_a_supervisor_restart(tmp_path):
     sup.save_deck()
     again = _supervisor(tmp_path)
     assert again.deck.slots == {"tmux:@7": 0}
+
+
+def test_click_and_dial_resend_the_deck_message_immediately(tmp_path):
+    # Without this, a knob gesture is invisible on the pad until the next
+    # _poll_deck cycle, up to CTX_POLL_S (1s) later -- reads as a broken knob.
+    sup = _supervisor(tmp_path)
+    sup.deck.update([{"id": "tmux:@%d" % i, "ws": "a", "n": str(i)} for i in range(13)])
+    sent = []
+    sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+    # Simulate a poll having already landed once, without running one for real.
+    sup._deck_render_args = ({"a": "ffffff"}, None, set())
+
+    sup._on_pad_msg({"t": "click"})                  # vol -> page
+    assert sup.knob_mode == "page"
+    assert sent and sent[-1]["t"] == "deck" and sent[-1]["knob"] == "page"
+
+    sup._on_pad_msg({"t": "dial", "d": 1})            # page mode: pages immediately
+    assert sup.deck_page == 1
+    assert sent[-1]["t"] == "deck" and sent[-1]["page"] == 1
+
+
+def test_knob_gestures_before_the_first_poll_send_nothing(tmp_path):
+    sup = _supervisor(tmp_path)
+    sent = []
+    sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+    sup._on_pad_msg({"t": "click"})
+    sup._on_pad_msg({"t": "dial", "d": 1})
+    assert sent == []                                 # no _deck_render_args yet: no crash, no send
+
+
+def test_focused_window_id_matches_active_tmux_window_in_active_session(tmp_path):
+    sup = _supervisor(tmp_path)
+    twins = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
+              "active": True, "bell": False},
+             {"id": "tmux:@2", "s": "mirepoix", "i": 2, "n": "tests",
+              "active": False, "bell": False}]
+    sup.state.fg = {1: {"addr": "0xaaa", "cls": "ws-mirepoix"}}
+    sup.state.active = 1
+    assert sup._focused_window_id(twins) == "tmux:@1"
+
+    # No ws-* client on the active workspace: fall back to the plain
+    # Hyprland-focused client's own address (sessionless terminal, or a
+    # focused client that isn't a ws-* terminal at all).
+    sup.state.fg = {}
+    sup.state.addr = "0xffox"
+    assert sup._focused_window_id(twins) == "hypr:0xffox"
+
+    sup.state.addr = ""
+    assert sup._focused_window_id(twins) is None
+
+
+def test_poll_deck_populates_caches_dedupes_and_saves_on_change(monkeypatch, tmp_path):
+    # The integration seam _deck_msg/on_tap/_focus_deck_window all assume
+    # _poll_deck already populated: this drives it against a real
+    # list_deck_windows shape and a real ws-* client, rather than hand-stubbing
+    # _deck_twins/_deck_ws_addr the way the tap tests above do -- so the one
+    # thing that must actually agree, _deck_ws_addr's key (client class minus
+    # "ws-") against a twin's "s" (tmux session name), is genuinely exercised.
+    from keymakerd import tmux as tmuxmod
+    import json as jsonmod
+
+    CLIENTS = [{"class": "ws-mirepoix", "address": "0xaaa",
+                "workspace": {"id": 1, "name": "mirepoix"}}]
+    ONE_WINDOW = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
+                   "active": True, "bell": False}]
+
+    async def scenario():
+        windows = list(ONE_WINDOW)
+
+        async def fake_list():
+            return windows
+
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        sup.state.clients = CLIENTS
+        sup.state.fg = {1: {"addr": "0xaaa", "cls": "ws-mirepoix"}}
+        sup.state.active = 1
+
+        await sup._poll_deck()
+        after_first = list(sent)
+        saved_after_first = jsonmod.loads((tmp_path / "deck-slots.json").read_text())
+        twins_after_first = dict(sup._deck_twins)
+        addr_after_first = dict(sup._deck_ws_addr)
+
+        await sup._poll_deck()                     # identical input: no re-send
+        after_second = list(sent)
+
+        windows.clear()                             # the window disappears
+        await sup._poll_deck()
+        after_third = list(sent)
+        saved_after_third = jsonmod.loads((tmp_path / "deck-slots.json").read_text())
+
+        return (after_first, after_second, after_third, saved_after_first,
+                saved_after_third, twins_after_first, addr_after_first)
+
+    (after_first, after_second, after_third, saved_after_first, saved_after_third,
+     twins_after_first, addr_after_first) = asyncio.run(scenario())
+
+    deck_msgs_1 = [m for m in after_first if m["t"] == "deck"]
+    deck_msgs_2 = [m for m in after_second if m["t"] == "deck"]
+    deck_msgs_3 = [m for m in after_third if m["t"] == "deck"]
+    assert len(deck_msgs_1) == 1
+    assert deck_msgs_1[0]["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "focused"}]
+    assert len(deck_msgs_2) == 1                    # dedupe: identical input, no re-send
+    assert len(deck_msgs_3) == 2                     # the disappearance IS a change
+
+    assert twins_after_first == {"tmux:@1": ONE_WINDOW[0]}
+    assert addr_after_first == {"mirepoix": "0xaaa"}
+
+    assert saved_after_first["slots"] == {"tmux:@1": 0}
+    assert saved_after_third["slots"] == {}          # save gate fired on the shrink
