@@ -93,3 +93,43 @@ def ctx_key_color(item, pal, phase=0.0):
     if item.get("active"):
         return c
     return scale(c, OCCUPIED_SCALE)
+
+
+# ---- deck key states (spec section 5.3) ------------------------------------
+# Hue carries workspace identity and NOTHING else. States differ by brightness
+# and animation only -- which is also the only encoding that survives Chris's
+# CVD and a swappable theme.
+#
+# 0.34 sits between two measured points documented above: 0.25, which collapsed
+# the whole palette into a 13-step PWM window where lightness stopped working as a
+# channel at all, and OCCUPIED_SCALE 0.55. A ghost must read as recessive against
+# a live key while still carrying its hue -- which is the one thing it still has
+# to say: whose workspace it belonged to.
+#
+# NOT derived from the PWM-4 comfort floor. That floor is a property of the byte
+# AFTER neopixel's global BRIGHTNESS is applied, which scale() does not include,
+# so no unit test here can assert it. Validate the emitted floor on hardware with
+# daemon/keymakerd/ledtest.py and led-ramp before treating 0.34 as final.
+GHOST_SCALE = 0.34
+
+
+def state_factor(state, phase=0.0):
+    """Brightness factor for a deck key state. Pass phase for 'bell'."""
+    if state == "focused":
+        return 1.0
+    if state == "bell":
+        return urgent_factor(phase)
+    if state == "live":
+        return OCCUPIED_SCALE
+    if state == "ghost":
+        return GHOST_SCALE
+    return 0.0
+
+
+def deck_key_color(state, ws_hex, phase=0.0):
+    """Final pixel value for a deck key. Third of the ws_key_color /
+    ctx_key_color family: colour decisions live here so the firmware only
+    assigns, and so they are testable -- CircuitPython does not run pytest."""
+    if state == "empty" or not ws_hex:
+        return 0x000000
+    return scale(hex_to_int(ws_hex), state_factor(state, phase))

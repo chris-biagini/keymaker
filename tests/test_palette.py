@@ -96,3 +96,56 @@ def test_urgent_never_dimmer_than_an_occupied_key():
     assert (dimmest_urgent & 0xFF00) >> 8 >= (occupied & 0xFF0000) >> 16
     assert kp.urgent_factor(0.0) >= kp.OCCUPIED_SCALE
     assert kp.urgent_factor(1.0) == 1.0
+
+
+def test_state_factor_orders_states_by_brightness():
+    assert kp.state_factor("focused") == 1.0
+    assert kp.state_factor("live") == kp.OCCUPIED_SCALE
+    assert kp.state_factor("ghost") < kp.OCCUPIED_SCALE
+    assert kp.state_factor("empty") == 0.0
+
+
+def test_a_bell_pulses_between_live_and_focused_never_below_ambient():
+    lo = kp.state_factor("bell", phase=0.0)
+    hi = kp.state_factor("bell", phase=1.0)
+    assert lo == kp.OCCUPIED_SCALE      # never dimmer than a live key
+    assert hi == 1.0
+
+
+def test_a_ghost_keeps_its_hue_on_the_darkest_cell_in_the_palette():
+    # The one thing a ghost must still communicate is WHICH workspace it was.
+    # #6d0a9e is Petroff 10's darkest led cell (channels 6d/0a/9e); its green
+    # channel is the first thing to quantise away as the factor drops.
+    rgb = kp.hex_to_int("6d0a9e")
+    dim = kp.scale(rgb, kp.state_factor("ghost"))
+    r, g, b = (dim >> 16) & 0xFF, (dim >> 8) & 0xFF, dim & 0xFF
+    assert g > 0, "green quantised to zero: the hue is gone, not dimmed"
+    assert b > r > g, "channel ordering must survive dimming"
+    full_ratio = 0x6d / 0x9e
+    assert abs(r / b - full_ratio) < 0.02, "hue drifted while dimming"
+
+
+def test_white_neutral_survives_dimming_as_white():
+    dim = kp.scale(kp.hex_to_int("ffffff"),
+                   kp.state_factor("ghost"))
+    r, g, b = (dim >> 16) & 0xFF, (dim >> 8) & 0xFF, dim & 0xFF
+    assert r == g == b                          # still achromatic when dim
+
+
+def test_deck_key_color_mirrors_the_existing_key_colour_helpers():
+    # ws_key_color and ctx_key_color already own colour decisions so the
+    # firmware only assigns. deck_key_color is the third of that family; without
+    # it the scale maths would sit in cockpit.py where nothing can test it.
+    lit = kp.deck_key_color("focused", "e16000", 0.0)
+    assert lit == kp.hex_to_int("e16000")
+    assert kp.deck_key_color("empty", "e16000", 0.0) == 0x000000
+    live = kp.deck_key_color("live", "e16000", 0.0)
+    ghost = kp.deck_key_color("ghost", "e16000", 0.0)
+    assert ((lit >> 16) & 0xFF) > ((live >> 16) & 0xFF) > ((ghost >> 16) & 0xFF)
+
+
+def test_deck_key_color_pulses_a_bell_between_live_and_focused():
+    lo = kp.deck_key_color("bell", "e16000", 0.0)
+    hi = kp.deck_key_color("bell", "e16000", 1.0)
+    assert lo == kp.deck_key_color("live", "e16000", 0.0)
+    assert hi == kp.deck_key_color("focused", "e16000", 0.0)
