@@ -5,11 +5,20 @@ def w(wid, ws="mirepoix", n="1 rails"):
     return {"id": wid, "ws": ws, "n": n}
 
 
-def test_windows_take_lowest_free_slot_in_deterministic_order():
+def test_cold_start_preserves_caller_order_not_alphabetical():
     d = km_deck.Deck()
+    # "colorhash" sorts before "mirepoix" alphabetically, but km_deck no longer
+    # sorts -- the caller decides order (e.g. Hyprland's on-screen workspace
+    # order), and km_deck must not silently reorder it.
     d.update([w("tmux:@3", "mirepoix", "2 specs"), w("tmux:@1", "colorhash", "1 lab")])
-    # Cold start sorts by (ws, n) so a restart is reproducible, not arbitrary.
-    assert d.slots == {"tmux:@1": 0, "tmux:@3": 1}
+    assert d.slots == {"tmux:@3": 0, "tmux:@1": 1}
+
+
+def test_a_caller_supplied_order_is_respected_exactly():
+    d = km_deck.Deck()
+    d.update([w("tmux:@1", "colorhash", "1 lab"), w("tmux:@3", "mirepoix", "2 specs"),
+              w("tmux:@2", "bonsai", "1")])
+    assert d.slots == {"tmux:@1": 0, "tmux:@3": 1, "tmux:@2": 2}
 
 
 def test_a_window_holds_its_slot_when_others_come_and_go():
@@ -78,12 +87,14 @@ def test_page_count_is_one_when_empty_and_grows_by_twelve():
 
 def test_message_carries_only_the_current_page_with_ws_by_reference():
     d = km_deck.Deck()
+    # Caller order is preserved (km_deck no longer sorts), so "mirepoix" --
+    # listed first -- claims slot 0 and is the first ws entry.
     d.update([w("tmux:@1", "mirepoix", "1 rails"), w("tmux:@2", "colorhash", "1 lab")])
     m = d.message(page=0, knob="page", colors={"mirepoix": "e16000", "colorhash": "6d0a9e"})
     assert m["t"] == "deck"
-    assert m["ws"] == [["colorhash", "6d0a9e"], ["mirepoix", "e16000"]]
-    assert m["slots"] == [{"i": 0, "c": 0, "n": "1 lab", "s": "live"},
-                          {"i": 1, "c": 1, "n": "1 rails", "s": "live"}]
+    assert m["ws"] == [["mirepoix", "e16000"], ["colorhash", "6d0a9e"]]
+    assert m["slots"] == [{"i": 0, "c": 0, "n": "1 rails", "s": "live"},
+                          {"i": 1, "c": 1, "n": "1 lab", "s": "live"}]
     assert m["pages"] == 1 and m["page"] == 0 and m["knob"] == "page"
 
 

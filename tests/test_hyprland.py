@@ -247,6 +247,38 @@ def test_tmux_windows_take_the_workspace_of_their_ws_client():
     assert got["tmux:@2"]["n"] == "1 rails"       # index carried into the label
 
 
+def test_deck_windows_orders_by_workspace_id_not_name():
+    # Chris's actual layout (2026-08-20): id 1 bonsai, id 2 mirepoix, id 3
+    # colorhash. Alphabetically that's bonsai, colorhash, mirepoix -- which
+    # would put colorhash on key 2 instead of key 3, contradicting Hyprland's
+    # on-screen left-to-right workspace order. deck_windows must sort by
+    # workspace id, not name.
+    clients = [
+        {"address": "0x1", "class": "ws-bonsai", "workspace": {"id": 1, "name": "bonsai"}},
+        {"address": "0x2", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
+        {"address": "0x3", "class": "ws-colorhash", "workspace": {"id": 3, "name": "colorhash"}},
+    ]
+    twins = [
+        {"id": "tmux:@c", "s": "colorhash", "i": 1, "n": "app", "active": False, "bell": False},
+        {"id": "tmux:@m", "s": "mirepoix", "i": 1, "n": "rails", "active": False, "bell": False},
+        {"id": "tmux:@b", "s": "bonsai", "i": 1, "n": "notes", "active": False, "bell": False},
+    ]
+    got = hyprland.deck_windows(twins, clients)
+    assert [g["id"] for g in got] == ["tmux:@b", "tmux:@m", "tmux:@c"]
+
+
+def test_deck_windows_sessionless_terminal_follows_its_workspaces_tmux_windows():
+    clients = [
+        {"address": "0x1", "class": "ws-mirepoix", "workspace": {"id": 1, "name": "mirepoix"}},
+        {"address": "0x2", "class": "foot", "workspace": {"id": 1, "name": "mirepoix"}},
+        {"address": "0x3", "class": "foot", "workspace": {"id": 2, "name": "bonsai"}},
+    ]
+    twins = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
+              "active": False, "bell": False}]
+    got = hyprland.deck_windows(twins, clients)
+    assert [g["id"] for g in got] == ["tmux:@1", "hypr:0x2", "hypr:0x3"]
+
+
 def test_unnamed_workspaces_render_white_not_nothing():
     got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)
     colors = hyprland.deck_colors(got)

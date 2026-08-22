@@ -41,9 +41,12 @@ class Deck:
                 live[win["id"]] = self.slots[win["id"]]
             else:
                 fresh.append(win)
-        # Cold start (or any batch of new windows) is sorted so the assignment is
-        # reproducible rather than dependent on enumeration order.
-        fresh.sort(key=lambda x: (x["ws"], x["n"]))
+        # `fresh` keeps the caller's order verbatim -- no sort here. Slot
+        # assignment order is a display-order decision (it determines which
+        # key a window lands on), and only the caller knows what that order
+        # should be (e.g. Hyprland's on-screen workspace order). km_deck stays
+        # free of Hyprland concepts, so it trusts the input order rather than
+        # imposing one of its own.
         gone = {wid: s for wid, s in self.slots.items() if wid not in live}
         by_id = {x["id"]: x for x in windows}
         self.slots = live

@@ -260,31 +260,50 @@ def _is_terminal(cls):
 
 
 def deck_windows(tmux_windows, clients):
-    """Windows that earn a key, as [{id, ws, n}] for km_deck.Deck.update."""
-    ws_of_session = {}
+    """Windows that earn a key, as [{id, ws, n}] for km_deck.Deck.update.
+
+    Ordered by workspace id so the deck reads left-to-right the way Hyprland's
+    workspaces do on screen. km_deck.Deck.update no longer sorts (it trusts
+    caller order verbatim), so this function owns the ordering decision --
+    it's the only side that knows Hyprland's workspace order. Sorting by
+    workspace NAME (the old behaviour) contradicted on-screen order whenever
+    names don't happen to sort the way the workspaces are numbered, e.g.
+    id 1 "bonsai", id 2 "mirepoix", id 3 "colorhash" would put colorhash
+    (alphabetically second) ahead of mirepoix on the keys.
+
+    Within a workspace, tmux windows sort by (session name, window index) and
+    come before that workspace's sessionless terminals, which sort by address.
+    """
+    ws_of_session = {}   # session name -> (workspace id, workspace name)
     used_addrs = set()
     for c in clients:
         cls = str(c.get("class", ""))
         if cls.startswith("ws-"):
-            ws_of_session[cls[3:]] = str(c.get("workspace", {}).get("name", ""))
+            wsobj = c.get("workspace", {})
+            ws_of_session[cls[3:]] = (wsobj.get("id"), str(wsobj.get("name", "")))
             used_addrs.add(str(c.get("address", "")))
 
-    out = []
+    entries = []
     for win in tmux_windows:
-        ws = ws_of_session.get(win["s"])
-        if ws is None:              # session with no local client: nothing to jump to
+        entry = ws_of_session.get(win["s"])
+        if entry is None:           # session with no local client: nothing to jump to
             continue
-        out.append({"id": win["id"], "ws": ws,
-                    "n": "%d %s" % (win["i"], win["n"])})
+        ws_id, ws_name = entry
+        entries.append(((ws_id, 0, win["s"], win["i"]), {
+            "id": win["id"], "ws": ws_name, "n": "%d %s" % (win["i"], win["n"])}))
 
     for c in clients:
         addr = str(c.get("address", ""))
         if addr in used_addrs or not _is_terminal(c.get("class")):
             continue
-        out.append({"id": "hypr:" + addr,
-                    "ws": str(c.get("workspace", {}).get("name", "")),
-                    "n": str(c.get("title", "") or c.get("class", ""))})
-    return out
+        ws_id = c.get("workspace", {}).get("id")
+        entries.append(((ws_id, 1, addr), {
+            "id": "hypr:" + addr,
+            "ws": str(c.get("workspace", {}).get("name", "")),
+            "n": str(c.get("title", "") or c.get("class", ""))}))
+
+    entries.sort(key=lambda e: e[0])
+    return [e[1] for e in entries]
 
 
 def deck_colors(windows):
