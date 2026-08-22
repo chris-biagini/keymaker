@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from keymakerd import hyprland
 from keymakerd.hyprland import HyprState, find_instance_dir, parse_event
 
 WORKSPACES = [
@@ -215,3 +216,45 @@ def test_renameworkspace_triggers_refresh():
     from keymakerd.hyprland import HyprState
     s = HyprState()
     assert s.handle_event("renameworkspace", "1,wacky-sax") == (True, False)
+
+
+DECK_CLIENTS = [
+    {"address": "0xaa", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xbb", "class": "firefox",     "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xcc", "class": "foot",        "workspace": {"id": 1, "name": "bonsai"}},
+    {"address": "0xdd", "class": "foot",        "workspace": {"id": 4, "name": "4"}},
+]
+DECK_TWINS = [
+    {"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails", "active": True, "bell": False},
+    {"id": "tmux:@5", "s": "phoneonly", "i": 1, "n": "away", "active": False, "bell": False},
+]
+
+
+def test_only_signalling_locally_reachable_windows_earn_a_key():
+    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])
+    ids = [g["id"] for g in got]
+    assert "tmux:@2" in ids            # tmux window in a ws-* session
+    assert "hypr:0xcc" in ids          # bare foot, signals via Hyprland bell
+    assert "hypr:0xdd" in ids          # bare foot on an unnamed workspace
+    assert "hypr:0xbb" not in ids      # firefox cannot signal
+    assert "tmux:@5" not in ids        # no local client to jump to
+    assert "hypr:0xaa" not in ids      # the ws-* client itself is not a key
+
+
+def test_tmux_windows_take_the_workspace_of_their_ws_client():
+    got = {g["id"]: g for g in hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])}
+    assert got["tmux:@2"]["ws"] == "mirepoix"
+    assert got["tmux:@2"]["n"] == "1 rails"       # index carried into the label
+
+
+def test_unnamed_workspaces_render_white_not_nothing():
+    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS, [])
+    colors = hyprland.deck_colors(got)
+    assert colors["mirepoix"] == "e16000"
+    assert colors["4"] == "ffffff"                # bare-digit name: no identity
+
+
+def test_ws_color_itself_is_unchanged_and_still_returns_none():
+    # The neutral belongs to the deck path only; the workspace pill still wants
+    # None for an unnamed workspace so it can render nothing at all.
+    assert hyprland.ws_color("4") is None

@@ -233,3 +233,53 @@ class HyprState:
 
     def _win_msg(self):
         return {"t": "win", "cls": self.cls, "title": self.title}
+
+
+# A key is for something that can ASK FOR YOU and that you can GO TO locally.
+# Terminals qualify on both counts: a tmux window rings via window_bell_flag, a
+# bare terminal rings via Hyprland's bell event (foot.ini [bell] urgent=yes).
+# A browser does neither, and three of them would eat a quarter of the deck.
+TERMINAL_CLASSES = ("foot", "footclient", "alacritty", "kitty", "ghostty")
+
+# Unnamed (bare-digit) workspaces have no identity to hash, so they render white:
+# achromatic reads as "no identity assigned", which is exactly true. This is a HUE
+# substitute, not a brightness state -- see spec section 5.2.
+NEUTRAL_COLOR = "ffffff"
+
+
+def _is_terminal(cls):
+    c = str(cls or "").lower()
+    return c in TERMINAL_CLASSES or c.startswith("ws-")
+
+
+def deck_windows(tmux_windows, clients, workspaces):
+    """Windows that earn a key, as [{id, ws, n}] for km_deck.Deck.update."""
+    ws_of_session = {}
+    used_addrs = set()
+    for c in clients:
+        cls = str(c.get("class", ""))
+        if cls.startswith("ws-"):
+            ws_of_session[cls[3:]] = str(c.get("workspace", {}).get("name", ""))
+            used_addrs.add(str(c.get("address", "")))
+
+    out = []
+    for win in tmux_windows:
+        ws = ws_of_session.get(win["s"])
+        if ws is None:              # session with no local client: nothing to jump to
+            continue
+        out.append({"id": win["id"], "ws": ws,
+                    "n": "%d %s" % (win["i"], win["n"])})
+
+    for c in clients:
+        addr = str(c.get("address", ""))
+        if addr in used_addrs or not _is_terminal(c.get("class")):
+            continue
+        out.append({"id": "hypr:" + addr,
+                    "ws": str(c.get("workspace", {}).get("name", "")),
+                    "n": str(c.get("title", "") or c.get("class", ""))})
+    return out
+
+
+def deck_colors(windows):
+    """{workspace name: led hex} for a deck window list, white where unnamed."""
+    return {win["ws"]: (ws_color(win["ws"]) or NEUTRAL_COLOR) for win in windows}
