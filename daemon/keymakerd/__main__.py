@@ -395,6 +395,8 @@ class Supervisor:
 
     async def _poll_deck(self):
         try:
+            if not self.state.clients:
+                return          # no Hyprland snapshot yet; a wipe here would be a lie
             twins = await tmux.list_deck_windows()
             if twins is None:
                 return

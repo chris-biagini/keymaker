@@ -731,3 +731,38 @@ def test_poll_deck_populates_caches_dedupes_and_saves_on_change(monkeypatch, tmp
 
     assert saved_after_first["slots"] == {"tmux:@1": 0}
     assert saved_after_third["slots"] == {}          # save gate fired on the shrink
+
+
+def test_poll_deck_with_no_hyprland_snapshot_never_wipes_the_persisted_deck(monkeypatch, tmp_path):
+    # I1: state.clients starts [] and is only filled by HyprState.refresh, while
+    # _poll_deck runs on its own independent timer. A poll landing before the
+    # first refresh (or after a hyprctl round trip fails once) must NOT be read
+    # as "no windows are running" -- that would clear every slot and overwrite
+    # deck-slots.json with {}, destroying the exact file sticky allocation
+    # exists to protect.
+    from keymakerd import tmux as tmuxmod
+
+    async def fake_list():
+        return [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
+                 "active": True, "bell": False}]
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
+        sup.deck.slots = {"tmux:@1": 0}
+        sup.deck._last = {"tmux:@1": {"ws": "mirepoix", "n": "1 rails"}}
+        sup.save_deck()
+        before = dict(sup.deck.slots)
+
+        sup.state.clients = []           # no snapshot yet
+        await sup._poll_deck()
+
+        return before, dict(sup.deck.slots)
+
+    before, after = asyncio.run(scenario())
+    assert after == before == {"tmux:@1": 0}
+    saved = json.loads((tmp_path / "deck-slots.json").read_text())
+    assert saved["slots"] == {"tmux:@1": 0}
