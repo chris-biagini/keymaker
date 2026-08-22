@@ -131,6 +131,15 @@ figures below are the resulting pixel rows.
 | 53–61 | Legend row 3 | `Label` |
 | 23–61 | State gutters | `Bitmap` (128 × 39 at y=23) |
 
+**The gutter bitmap shares its rows with the legend labels, so layering is
+load-bearing.** `displayio` draws a `Group`'s children in append order, later on
+top, and a `Palette` entry is opaque unless explicitly made transparent. The
+TileGrid must therefore be appended **before** the labels, and palette index 0
+must be `make_transparent(0)`. Get either wrong and a 128 × 39 opaque black
+rectangle paints over all four legend rows — the layout's entire content. The
+previous layout was immune to this by accident: its 94 × 22 bitmap at y=40 sat
+clear of every label, so opacity never mattered.
+
 Six labels total, and no per-cell labels. `ui.py` has four today (`header`,
 `line1`, `line2`, `footer`): `line2` is repurposed as legend row 0, `footer` as
 legend row 1, and two labels are added.
@@ -150,6 +159,12 @@ composition is not inlined in firmware.
 The focused row renders `deck["focus"]` (§7.1) through `km_text.marquee` when it
 exceeds 21 columns, and as plain text when it does not. This is `marquee`'s only
 remaining caller.
+
+`FOCUS_MAX` is therefore **40**, not 21. Trimming to the screen width would make
+the marquee unreachable — `marquee` returns early when the text already fits — so
+a 21-column cap would silently retire the scroll this section specifies. The
+accepted cost is that a scrolling row rewrites one label per tick while it moves;
+that is the one surface allowed to, and it stops as soon as the name fits.
 
 During a re-key countdown this row is replaced (§6).
 
@@ -267,6 +282,14 @@ window's metadata regardless of page — so no daemon-side plumbing is needed an
 the daemon's `_deck_msg` only loses its `knob` argument.
 
 **Removed:** `"knob"` — there is only one knob mode.
+
+**Removed:** `"map"` and `"bells"`. Both existed to drive the old minimap. The
+legend renders bell state from each slot's own `s` field, so neither is read by
+the pad any more, and `shared/km_deck.py`'s `minimap_boxes` / `minimap_cell` /
+`minimap_pixels` go with them. A production chain with no display is worse than
+no chain at all — it reads as live code and bounds nothing that is drawn.
+
+Note this removes the only consumer of `MINIMAP_MAX_PAGES`.
 
 All other fields are unchanged.
 
