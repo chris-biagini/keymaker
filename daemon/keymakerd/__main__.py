@@ -4,7 +4,6 @@ import json
 import os
 
 import km_deck
-import km_proto
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,42 +15,6 @@ from .theme import ThemeWatcher, resolve_theme_dir
 PING_S = 5.0
 DEBOUNCE_S = 0.1
 CTX_POLL_S = 1.0
-
-
-def _ctx_none():
-    return {"t": "ctx", "mode": "none", "session": None, "items": [], "addr": None}
-
-
-def _ledger_none():
-    return {"t": "ledger", "claudes": [], "bells": []}
-
-
-# LineCodec discards lines over 2048 bytes WHOLE -- an uncapped ledger would
-# render fine on a quiet bench and then silently show a STALE ledger on the
-# busiest day (state-shaped protocol: nothing retransmits until the next
-# change), which is exactly when it matters. Field caps live in tmux.py
-# (_TITLE_MAX/_SESSION_MAX); count caps here; and because JSON escaping can
-# still inflate quote-heavy titles (review 2026-08-16 measured 1313 B worst
-# case pre-fix), the encoded size is CHECKED, shedding busy-last entries until
-# it fits. Waiting Claudes sort first so the shedding order is least-interesting.
-LEDGER_MAX_CLAUDES = 4
-LEDGER_MAX_BELLS = 6
-LEDGER_MAX_BYTES = 1000     # headroom under LineCodec's 2048
-
-
-def _ledger_msg(claudes, bells):
-    claudes = sorted(claudes, key=lambda c: c["busy"])[:LEDGER_MAX_CLAUDES]
-    bells = bells[:LEDGER_MAX_BELLS]
-    while True:
-        msg = {"t": "ledger", "claudes": claudes, "bells": bells}
-        if len(km_proto.encode(msg)) <= LEDGER_MAX_BYTES:
-            return msg
-        if claudes:
-            claudes = claudes[:-1]
-        elif bells:
-            bells = bells[:-1]
-        else:
-            return msg
 
 
 @dataclass
@@ -68,8 +31,6 @@ class Supervisor:
         self.cfg = cfg
         self.state = hyprland.HyprState()
         self.palette = None
-        self.ctx = _ctx_none()
-        self.ledger = _ledger_none()
         self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
         self.deck = km_deck.Deck(self.deck_store.load())
         self.deck_page = 0
@@ -114,8 +75,6 @@ class Supervisor:
             self.link.send(self.palette)
         for m in self.state.snapshot():
             self.link.send(m)
-        self.link.send(self.ctx)
-        self.link.send(self.ledger)
         # The deck is the switchboard itself: a reconnecting pad (USB reset, a
         # firmware deploy, the app-menu round trip in framework.py, which also
         # re-sends `hello`) otherwise starts from its empty default deck and
@@ -317,38 +276,10 @@ class Supervisor:
             await asyncio.sleep(PING_S)
             self.link.send({"t": "ping"})
 
-    async def _context(self):
-        # `ctx` here is the OLD split-deck context message, superseded by `deck`
-        # (see docs/superpowers/specs/2026-08-22-macropad-switchboard-design.md).
-        # Left running rather than deleted: cockpit.py (Task 9) hasn't switched to
-        # `deck` rendering yet, and untangling this from `_poll_ledger` below is a
-        # separate cleanup once nothing consumes it, not this task's job.
+    async def _poll_loop(self):
         while True:
             await asyncio.sleep(CTX_POLL_S)
-            client = self.state.fg.get(self.state.active)
-            new = _ctx_none()
-            if client is not None:
-                candidates = [client["cls"].removeprefix("ws-")]
-                label = self.state.names.get(str(self.state.active))
-                if label:
-                    fallback = hyprland.session_name(label)
-                    if fallback and fallback not in candidates:
-                        candidates.append(fallback)
-                try:
-                    for session in candidates:
-                        items = await tmux.list_windows(session)
-                        if items is not None:
-                            new = {"t": "ctx", "mode": "tmux", "session": session,
-                                   "items": [w for w in items if 1 <= w["i"] <= 6],
-                                   "addr": client["addr"]}
-                            break
-                except Exception as e:
-                    print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
-            if new != self.ctx:
-                self.ctx = new
-                self.link.send(new)
             await self._poll_deck()
-            await self._poll_ledger()
 
     async def _poll_deck(self):
         try:
@@ -383,21 +314,6 @@ class Supervisor:
         except Exception as e:
             print(f"keymakerd: deck poll failed: {e!r}", flush=True)
 
-    async def _poll_ledger(self):
-        # Global on purpose -- the ledger is the "what's waiting on me" surface
-        # and must keep reporting while focus (or the whole screen, via hyprlock)
-        # is elsewhere. The pad is a display hyprlock has no jurisdiction over.
-        try:
-            bells = await tmux.list_bells()
-            claudes = await tmux.list_claude_panes()
-        except Exception as e:
-            print(f"keymakerd: ledger poll failed: {e!r}", flush=True)
-            return
-        new = _ledger_msg(claudes or [], bells or [])
-        if new != self.ledger:
-            self.ledger = new
-            self.link.send(new)
-
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)
         # ledtest: spike-grade debug bridge for palette eyeballing. Always via
@@ -405,7 +321,7 @@ class Supervisor:
         # watcher idles harmlessly when the spool never appears.
         await asyncio.gather(self.link.run(), self._hypr_events(),
                              self._refresher(), self._pinger(),
-                             self._context(), theme.run(),
+                             self._poll_loop(), theme.run(),
                              ledtest.watch(str(self.cfg.state_dir / "ledtest.json"),
                                            self.link.send))
 

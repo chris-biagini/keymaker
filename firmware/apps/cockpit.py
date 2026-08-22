@@ -1,12 +1,12 @@
 """Cockpit: the switchboard deck. Keys are sticky slots over every running
-terminal window, one page (12 slots) at a time; knob pages; OLED = identity
-+ attention ledger."""
+terminal window, one page (12 slots) at a time; knob pages; OLED = identity.
+(Task 7 rebuilds the OLED's lower two lines; blank for now.)"""
 from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_deck
 import km_palette
 from km_keys import KeyTracker
-from km_text import header_line, marquee
+from km_text import header_line
 
 from pad.framework import App
 from pad.ui import WIDTH_CHARS
@@ -18,8 +18,6 @@ class Cockpit(App):
     def __init__(self):
         self.deck = {"t": "deck", "page": 0, "pages": 1,
                      "ws": [], "slots": [], "map": [0], "bells": []}
-        self.ledger = {"t": "ledger", "claudes": [], "bells": []}
-        self.win = {"cls": "", "title": ""}
         self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
@@ -53,14 +51,10 @@ class Cockpit(App):
         t = msg["t"]
         if t == "deck":
             self.deck = msg
-        elif t == "win":
-            self.win = msg
         elif t == "flags":
             self.flags = msg
         elif t == "palette":
             self.palette = msg
-        elif t == "ledger":
-            self.ledger = msg
         self._draw_all(ticks_ms())
 
     def on_key_event(self, n, pressed, now):
@@ -76,7 +70,7 @@ class Cockpit(App):
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})
         self._draw_leds(now)          # every pass: urgent pulse animation
-        self._draw_text(now)          # marquee needs time too
+        self._draw_text(now)          # minimap blink needs time too
 
     # ---- drawing --------------------------------------------------
     def _draw_leds(self, now):
@@ -144,35 +138,10 @@ class Cockpit(App):
         if header != self._header_text:
             self._header_text = header
             self.screen.set_header(header)
-        # Attention ledger: what is waiting on you, machine-wide. Blank lines
-        # mean all clear -- a glanceable state in itself, and it reads across a
-        # locked screen because the pad is a display hyprlock cannot cover.
-        claudes = self.ledger.get("claudes", [])
-        bells = self.ledger.get("bells", [])
-        waiting = [c for c in claudes if not c.get("busy")]
-        busy = len(claudes) - len(waiting)
-        # line1 does double duty: waiting Claudes and the busy count are
-        # mutually exclusive in practice -- a fleet with something waiting is
-        # a fleet you should look at before counting what is merely running --
-        # so busy only shows on the row when there is nothing waiting to show
-        # instead. Keeps the "N working" indicator without a screen row of
-        # its own (footer is now the minimap's counts column).
-        if waiting:
-            text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
-            line1 = marquee("* " + text, WIDTH_CHARS, now)
-        elif busy:
-            line1 = "%d working" % busy
-        else:
-            line1 = ""
-        if bells:
-            text = " ".join(b.get("s", "?") + ":" + str(b.get("i", "?")) for b in bells)
-            line2 = marquee("! " + text, WIDTH_CHARS, now)
-        else:
-            line2 = ""
-        # marquee legitimately returns a new string most ticks while scrolling,
-        # so this is gated on the value actually changing, not on time -- it
-        # still skips the write whenever a marquee isn't moving (or there's
-        # nothing to show) without ever holding a scroll still.
+        # Task 7 rebuilds the OLED's lower two lines; blank for now rather
+        # than stale.
+        line1 = ""
+        line2 = ""
         if line1 != self._line1_text:
             self._line1_text = line1
             self.screen.line1.text = line1

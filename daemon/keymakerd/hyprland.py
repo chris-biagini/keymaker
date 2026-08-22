@@ -143,8 +143,6 @@ class HyprState:
         self.colors = {}
         self.names = {}
         self.light = False
-        self.cls = ""
-        self.title = ""
         self.addr = ""
         self.fg = {}          # ws id -> {"addr", "cls"} best ws-* client
         self.submap = ""
@@ -222,24 +220,16 @@ class HyprState:
             self.active, self.occupied, self.urgent_ws, self.colors, self.names = (
                 active, occupied, urgent, colors, names)
             msgs.append(self._ws_msg())
-        cls = (active_win or {}).get("class", "")
-        title = (active_win or {}).get("title", "")[:60]
         self.addr = str((active_win or {}).get("address", ""))
-        if (cls, title) != (self.cls, self.title):
-            self.cls, self.title = cls, title
-            msgs.append(self._win_msg())
         return msgs
 
     def snapshot(self):
-        return [self._ws_msg(), self._win_msg()]
+        return [self._ws_msg()]
 
     def _ws_msg(self):
         return {"t": "ws", "active": self.active, "occupied": self.occupied,
                 "urgent": self.urgent_ws, "colors": self.colors,
                 "names": self.names}
-
-    def _win_msg(self):
-        return {"t": "win", "cls": self.cls, "title": self.title}
 
 
 # A key is for something that can ASK FOR YOU and that you can GO TO locally.

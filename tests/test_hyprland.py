@@ -27,11 +27,10 @@ def test_find_instance_dir_picks_dir_with_socket(tmp_path):
     assert find_instance_dir(tmp_path) == b
 
 
-def test_refresh_produces_ws_and_win_messages_once():
+def test_refresh_produces_ws_message_once():
     s = HyprState()
     msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
     assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": [], "colors": {}, "names": {}} in msgs
-    assert {"t": "win", "cls": "foot", "title": "vim ~/notes.md"} in msgs
     assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) == []   # no change, no msgs
 
 
@@ -66,11 +65,11 @@ def test_submap_and_screencast_touch_flags_only():
     assert s.screencast is True
 
 
-def test_snapshot_always_returns_both_messages():
+def test_snapshot_always_returns_the_ws_message():
     s = HyprState()
     s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
     ts = sorted(m["t"] for m in s.snapshot())
-    assert ts == ["win", "ws"]
+    assert ts == ["ws"]
 
 
 def test_fnv1a32_matches_the_colorhash_contract():

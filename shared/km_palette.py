@@ -65,18 +65,6 @@ def key_color(state, pal, phase=0.0):
     return 0
 
 
-def ws_key_color(state, ws_hex, pal, phase=0.0):
-    """Per-workspace color for active/occupied; theme fallback otherwise."""
-    if ws_hex is None or state in ("urgent", "empty"):
-        return key_color(state, pal, phase)
-    c = hex_to_int(ws_hex)
-    if state == "active":
-        return c
-    if state == "occupied":
-        return scale(c, OCCUPIED_SCALE)
-    return 0
-
-
 # ---- deck key states (spec section 5.3) ------------------------------------
 # Hue carries workspace identity and NOTHING else. States differ by brightness
 # and animation only -- which is also the only encoding that survives Chris's
@@ -109,9 +97,9 @@ def state_factor(state, phase=0.0):
 
 
 def deck_key_color(state, ws_hex, phase=0.0):
-    """Final pixel value for a deck key. Sibling of ws_key_color: colour
-    decisions live here so the firmware only assigns, and so they are
-    testable -- CircuitPython does not run pytest."""
+    """Final pixel value for a deck key. Colour decisions live here so the
+    firmware only assigns, and so they are testable -- CircuitPython does
+    not run pytest."""
     if state == "empty" or not ws_hex:
         return 0x000000
     return scale(hex_to_int(ws_hex), state_factor(state, phase))

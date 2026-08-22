@@ -25,19 +25,6 @@ def test_key_color_missing_keys_fall_back_to_default():
     assert kp.key_color("active", {}) == kp.hex_to_int(kp.DEFAULT["accent"])
 
 
-def test_ws_key_color_uses_workspace_color():
-    pal = {"accent": "FF0000", "red": "00FF00"}
-    assert kp.ws_key_color("active", "e14b00", pal) == 0xE14B00
-    assert kp.ws_key_color("occupied", "e14b00", pal) == kp.scale(0xE14B00, kp.OCCUPIED_SCALE)
-
-
-def test_ws_key_color_falls_back_without_color_or_for_urgent():
-    pal = {"accent": "FF0000", "red": "00FF00"}
-    assert kp.ws_key_color("active", None, pal) == kp.key_color("active", pal)
-    assert kp.ws_key_color("urgent", "e14b00", pal, phase=1.0) == kp.key_color("urgent", pal, phase=1.0)
-    assert kp.ws_key_color("empty", "e14b00", pal) == 0
-
-
 # --- the pad's usable light budget: measured on hardware, not derived ---
 #
 # BRIGHTNESS lives in firmware/pad/framework.py and is applied by neopixel to
@@ -115,8 +102,8 @@ def test_white_neutral_survives_dimming_as_white():
 
 
 def test_deck_key_color_mirrors_the_existing_key_colour_helpers():
-    # ws_key_color and ctx_key_color already own colour decisions so the
-    # firmware only assigns. deck_key_color is the third of that family; without
+    # key_color and state_factor already own colour decisions so the
+    # firmware only assigns. deck_key_color builds on that family; without
     # it the scale maths would sit in cockpit.py where nothing can test it.
     lit = kp.deck_key_color("focused", "e16000", 0.0)
     assert lit == kp.hex_to_int("e16000")
