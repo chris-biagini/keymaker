@@ -346,3 +346,9 @@ def test_message_focus_is_trimmed_to_the_screen_width():
     d = km_deck.Deck()
     d.update([{"id": "tmux:@1", "ws": "a" * 30, "n": "1 " + "b" * 30}])
     assert len(d.message(0, {}, focused="tmux:@1")["focus"]) <= 21
+
+
+def test_message_reports_the_total_window_count_across_all_pages():
+    d = km_deck.Deck()
+    d.update([{"id": "tmux:@%d" % i, "ws": "a", "n": "%d w" % i} for i in range(14)])
+    assert d.message(0, {})["total"] == 14

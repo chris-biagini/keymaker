@@ -120,7 +120,7 @@ class Deck:
         focus = ("%s %s" % (fmeta["ws"], fmeta["n"]))[:FOCUS_MAX] if fmeta else ""
 
         return {
-            "t": "deck", "page": page, "pages": pages,
+            "t": "deck", "page": page, "pages": pages, "total": len(self.slots),
             "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
             "slots": slots, "map": masks,
             "bells": sorted(s for s in (self.slots[w] for w in bells if w in self.slots) if s < MINIMAP_MAX_PAGES * SLOTS_PER_PAGE),
