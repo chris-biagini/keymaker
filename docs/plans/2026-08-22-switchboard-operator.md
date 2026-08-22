@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - `shared/` runs on **both** CPython and CircuitPython. No `asyncio`, no `pathlib`, no f-strings-with-`=`, no `str.isalnum()` (absent on CircuitPython — use explicit character-range checks).
-- **Never type a literal U+00B7 (or any PUA/non-ASCII glyph) into a tool call.** Write it as `"·"` and verify with `od -c` before committing.
+- **The legend separator is ASCII `:`.** `terminalio.FONT` coverage above ASCII is not something this project has verified on hardware, and `session:index` is tmux's own addressing convention. No non-ASCII glyph is typed into any tool call in this plan.
 - Raw `ticks_ms()` values are never compared directly. Use `adafruit_ticks.ticks_diff` / `ticks_add` (wraparound). See `docs/pad-timing.md` §3.
 - **Never touch hardware unconditionally per tick.** `pixels.auto_write` is `True`, so every `pixels[i] = ...` drives the whole strip; and a `displayio.Bitmap` dirtied at loop frequency forces continuous panel refresh. Cache what was last written and write only the difference. See `docs/pad-timing.md` §5.
 - No arithmetic in `firmware/` — CircuitPython does not run under pytest. Geometry and content rules live in `shared/km_deck.py`.
@@ -98,6 +98,8 @@ Change the signature to `def run(macropad, app):`. Delete `HOLD_MENU_MS`, `menu_
 Add `on_enc(self, pressed, now)` to the `App` base class as a `pass` stub, and delete `on_click` from it. Keep the `ledtest` branch and the `hello` send on startup exactly as they are; change the `hello` payload's `"app"` field to `app.name`.
 
 Delete the `if menu_idx is None:` guard around the key-event dispatch and around `app.tick(now)` — there is no menu to guard against.
+
+`enc_tracker` was `KeyTracker`'s only use in this file, so also delete `from km_keys import KeyTracker`. Confirm with `grep -n KeyTracker firmware/pad/framework.py` returning nothing. `cockpit.py` still imports `KeyTracker` for its own key handling; do not touch that.
 
 - [ ] **Step 5: Remove Coach from the daemon**
 
@@ -203,7 +205,7 @@ In `daemon/keymakerd/__main__.py`:
 
 - [ ] **Step 5: Update the supervisor tests**
 
-In `tests/test_supervisor.py`, delete any test asserting on `knob_mode`, `muted`, `on_knob_press`, or a `click` message, and remove `"muted"` from any `flags` assertion.
+In `tests/test_supervisor.py`, delete `test_link_up_reports_current_mute_state` and `test_volume_failure_still_sends_flags` outright — both exist only to exercise the volume path. Then delete any remaining test asserting on `knob_mode`, `on_knob_press`, or a `click` message, and remove `"muted"` from any `flags` assertion.
 
 - [ ] **Step 6: Strip the pad side**
 
@@ -266,6 +268,12 @@ In `daemon/keymakerd/hyprland.py`, delete `win_msg` (the `{"t": "win", ...}` bui
 In `shared/km_palette.py`, delete `ws_key_color` and `ctx_key_color`. They served the pre-switchboard split deck and die with `ctx`.
 
 Verify first: `grep -rn "ws_key_color\|ctx_key_color" --include=*.py . | grep -v __pycache__` — if anything outside `tests/test_palette.py` still calls them, STOP and report rather than deleting. Remove their tests along with them.
+
+- [ ] **Step 3b: Delete the tests for what you just removed**
+
+In `tests/test_supervisor.py`, delete every `test_context_watcher_*` test (there are at least four: `_state_shaped_emission`, `_filters_slots_and_degrades`, `_survives_lister_exception`, `_falls_back_to_workspace_label_session`) and the `_quiet_ledger` fixture. They exercise `_context`'s ctx branch and the ledger, both of which are gone.
+
+Any test that patched around the ledger to keep it quiet now has nothing to quiet — if removing `_quiet_ledger` leaves a test referencing it, that test goes too.
 
 - [ ] **Step 4: Check for orphans**
 
@@ -332,12 +340,12 @@ def test_cell_label_is_always_exactly_six_characters():
 def test_cell_label_keeps_the_tmux_index_as_a_disambiguator():
     # Window names arrive as "<index> <name>", and the index is the most
     # distinguishing thing about two windows in the same session.
-    assert km_deck.cell_label("mirepoix", "2 recipe-page") == "mir" + "·" + "2r"
-    assert km_deck.cell_label("mirepoix", "3 alias-bug") == "mir" + "·" + "3a"
+    assert km_deck.cell_label("mirepoix", "2 recipe-page") == "mir:2r"
+    assert km_deck.cell_label("mirepoix", "3 alias-bug") == "mir:3a"
 
 
 def test_cell_label_pads_a_short_session_rather_than_shifting_columns():
-    assert km_deck.cell_label("a", "1 sh") == "a  " + "·" + "1s"
+    assert km_deck.cell_label("a", "1 sh") == "a  :1s"
 
 
 def test_legend_row_is_twenty_characters_with_gaps_at_6_and_13():
@@ -414,7 +422,7 @@ Append to `shared/km_deck.py`:
 CELL_CHARS = 6          # "sss<sep>nn"
 LEGEND_COLS = 3
 LEGEND_ROWS = 4
-CELL_SEP = "·"     # MIDDLE DOT -- never typed literally, see the plan
+CELL_SEP = ":"          # ASCII on purpose -- see the plan's ruling
 GUTTER_W = 4
 GUTTER_H = 9
 GUTTER_PITCH_X = 42     # exactly seven 6px character cells
@@ -519,11 +527,10 @@ def countdown_text(elapsed_ms):
 Run: `python3 -m pytest tests/ -q`
 Expected: PASS.
 
-- [ ] **Step 5: Verify the separator byte**
+- [ ] **Step 5: Verify the separator is pure ASCII**
 
-Run: `grep -n 'CELL_SEP' shared/km_deck.py | head -1` then
-`python3 -c "import sys; sys.path.insert(0,'shared'); import km_deck; print(repr(km_deck.CELL_SEP), km_deck.CELL_SEP.encode('utf8'))"`
-Expected: `'·' b'\xc2\xb7'` — the escape resolved to one MIDDLE DOT, not a literal pasted glyph or a mojibake pair.
+Run: `python3 -c "import sys; sys.path.insert(0,'shared'); import km_deck; print(repr(km_deck.CELL_SEP), km_deck.CELL_SEP.encode('ascii'))"`
+Expected: `':' b':'` — a `UnicodeEncodeError` here means a non-ASCII character reached the file.
 
 - [ ] **Step 6: Commit**
 
@@ -755,7 +762,8 @@ Unverified on hardware."
 ### Task 7: Render the legend in Cockpit
 
 **Files:**
-- Modify: `firmware/apps/cockpit.py`
+- Modify: `firmware/apps/cockpit.py`, `shared/km_deck.py` (Step 3 adds `total` to the wire)
+- Test: `tests/test_deck.py`
 
 **Interfaces:**
 - Consumes: `Screen.set_header/set_focus/set_legend/set_gutters`, `km_deck.cell_label`, `km_deck.legend_row`, `km_deck.gutter_pixels`, `km_text.header_line`, `km_text.marquee`.
@@ -864,7 +872,7 @@ In `tests/test_supervisor.py`:
 def test_rekey_clears_slots_and_ghosts_and_re_derives_in_order(tmp_path):
     # Sticky allocation means a window keeps its first slot for life, so this
     # is the ONLY way to reorder a board once assignments exist.
-    sup = make_supervisor(tmp_path)
+    sup = _supervisor(tmp_path)
     sup.deck.slots = {"tmux:@9": 0, "tmux:@1": 1}
     sup.deck.ghosts = {5: {"ws": "gone", "n": "1 old"}}
     sup.deck._last = {"tmux:@9": {"ws": "b", "n": "1 x"},
@@ -877,7 +885,7 @@ def test_rekey_clears_slots_and_ghosts_and_re_derives_in_order(tmp_path):
     assert sup.deck.ghosts == {}
 ```
 
-Adapt `make_supervisor` to whatever the existing tests in that file use to build a `Supervisor`; do not invent a new helper if one exists.
+`make_supervisor` above is a placeholder for the file's existing helper, which is `_supervisor(tmp_path)` at `tests/test_supervisor.py:15`. Use that; do not add a new helper.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -977,7 +985,7 @@ cd ~/src/keymaker && ./system/deploy-firmware.sh && systemctl --user restart key
 
 Check, in order:
 
-1. **Legend populates.** Twelve cells in the physical key arrangement, `sss·nn` per occupied slot, blanks elsewhere.
+1. **Legend populates.** Twelve cells in the physical key arrangement, `sss:nn` per occupied slot, blanks elsewhere.
 2. **Header** reads `nexus  P1/1 5w`, with `REC` appearing when screencasting.
 3. **Focused row** names the focused window, and keeps naming it after paging away.
 4. **Gutters** show four distinct shapes. A bell blinks; nothing else does.

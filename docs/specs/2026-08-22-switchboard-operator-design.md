@@ -173,15 +173,20 @@ arrangement, so the screen is a scale model of what is under the fingers.
 
 ### 5.4 Cell text
 
-Six characters: `sss` + `·` + `nn`, where `sss` is the first three characters
+Six characters: `sss` + `:` + `nn`, where `sss` is the first three characters
 of the session name and `nn` the first two alphanumeric characters of the window
-name. Examples: `mir·im`, `col·co`, `bon·ba`.
+name. Examples: `mir:1i`, `col:1c`, `bon:1b`.
 
 A sessionless terminal uses its window class in place of the session name.
 An empty slot renders six spaces.
 
-> The separator is U+00B7 MIDDLE DOT. Per project convention it is never typed
-> literally into a tool call; it is written as an escape and verified.
+> The separator is ASCII `:`. `terminalio.FONT`'s coverage above ASCII has never
+> been verified on this hardware, and `session:index` is tmux's own addressing
+> convention, so the colon is both safer and more idiomatic than a middle dot.
+
+The two alphanumerics are taken from the window name, which arrives as
+`"<index> <name>"` — so they are the tmux window index plus one letter, which is
+the most distinguishing pair available for two windows in the same session.
 
 ### 5.5 State gutters
 
@@ -279,7 +284,7 @@ from CPython under pytest and from CircuitPython on the pad:
 | Function | Returns |
 |---|---|
 | `legend_row(slots, row)` | the 20-character string for one legend row |
-| `cell_label(win)` | the six-character `sss·nn` abbreviation |
+| `cell_label(win)` | the six-character `sss:nn` abbreviation |
 | `gutter_pixels(states)` | set of lit `(x, y)` for all twelve gutters |
 | `countdown_text(elapsed_ms)` | `"RE-KEY IN 3"` / `2` / `1` / `None` |
 
@@ -309,7 +314,7 @@ codebase already.
 
 ## 11. Known risks
 
-**Six characters may not disambiguate.** `mir·re` and `mir·recipe-page`
+**Six characters may not disambiguate.** `mir:2r` and `mir:2re`
 collapse to the same abbreviation when two windows in a session share a prefix.
 The premise is that stable position plus a six-character hint is enough once the
 board is learned. This is the assumption most likely to be wrong and the cheapest
