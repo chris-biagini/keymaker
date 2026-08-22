@@ -106,9 +106,18 @@ class Cockpit(App):
         claudes = self.ledger.get("claudes", [])
         bells = self.ledger.get("bells", [])
         waiting = [c for c in claudes if not c.get("busy")]
+        busy = len(claudes) - len(waiting)
+        # line1 does double duty: waiting Claudes and the busy count are
+        # mutually exclusive in practice -- a fleet with something waiting is
+        # a fleet you should look at before counting what is merely running --
+        # so busy only shows on the row when there is nothing waiting to show
+        # instead. Keeps the "N working" indicator without a screen row of
+        # its own (footer is now the minimap's counts column).
         if waiting:
             text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
             self.screen.line1.text = marquee("* " + text, WIDTH_CHARS, now)
+        elif busy:
+            self.screen.line1.text = "%d working" % busy
         else:
             self.screen.line1.text = ""
         if bells:
