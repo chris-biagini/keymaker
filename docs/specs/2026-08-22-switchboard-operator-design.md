@@ -79,10 +79,16 @@ volume. `km_text.marquee` is retained; §5.2 gives it its one caller.
 
 ### 3.3 Knowledge preserved before deletion
 
-Coach produced real measurements about what the CircuitPython main loop can
-afford per tick — the constraint that governs everything in §5. Those findings
-are extracted to `docs/pad-timing.md` **before** any Coach file is deleted.
-That document is a prerequisite of the removal, not a follow-up to it.
+Coach was this project's only subsystem with hard timing requirements. Its
+findings are extracted to `docs/pad-timing.md` **before** any Coach file is
+deleted — a prerequisite of the removal, not a follow-up to it.
+
+The extraction corrected an assumption in an earlier draft of this spec: Coach
+produced no measurement of the loop rate, and **no such figure exists anywhere in
+this repo**. `framework.py`'s `run()` is a bare `while True:` with no sleep, so
+there is no per-tick budget to stay inside. The governing rule is not "stay under
+N ms" but **"never touch hardware unconditionally per tick"** — the lesson behind
+`cce8f41`, `0233a64`, and `489c99a` alike. §5.6 is that rule applied.
 
 ## 4. Input model
 
