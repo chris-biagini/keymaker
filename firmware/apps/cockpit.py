@@ -29,12 +29,24 @@ class Cockpit(App):
         # at zero writes per tick instead of a clear-then-repaint strobe. None
         # forces a full first paint.
         self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
+        # Last text/signature actually written to each OLED surface, so
+        # _draw_text can skip a redundant write instead of dirtying the panel
+        # every tick.
+        self._map_sig = None
+        self._header_text = None
+        self._line1_text = None
+        self._line2_text = None
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
         # A ledtest repaints via on_show; a stale cache would leave that debug
-        # frame stuck instead of being redrawn.
+        # frame (LEDs) or the last app's stale text (OLED) stuck instead of
+        # being redrawn.
         self._led_frame = [None] * km_deck.SLOTS_PER_PAGE
+        self._map_sig = None
+        self._header_text = None
+        self._line1_text = None
+        self._line2_text = None
         self._draw_all(ticks_ms())
 
     def on_msg(self, msg):
@@ -92,6 +104,11 @@ class Cockpit(App):
     def _draw_text(self, now):
         if not self.link.up:
             self.screen.idle_card()
+            # idle_card writes header/line1/line2 directly, bypassing the
+            # caches below; invalidate them so link recovery forces a full
+            # repaint instead of comparing against what idle_card left on screen.
+            self._header_text = self._line1_text = self._line2_text = None
+            self._map_sig = None
             return
         d = self.deck
         blink = (now // 450) % 2 == 0
@@ -99,7 +116,15 @@ class Cockpit(App):
         # because only five boxes fit in the 94px minimap strip alongside the
         # counts column, while `pages` counts every page the KEYS can reach.
         # Passing `pages` would draw boxes off the right edge of the strip.
-        self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
+        #
+        # set_minimap does map_bmp.fill(0) then redraws the whole bitmap; dirtying
+        # a displayio.Bitmap at tick frequency forces the panel to keep refreshing,
+        # which reads as a flicker. Only repaint when an input actually changed --
+        # the blink phase (twice a second) or the deck itself.
+        sig = (blink, d["page"], tuple(d["map"]), tuple(d["bells"]))
+        if sig != self._map_sig:
+            self._map_sig = sig
+            self.screen.set_minimap(len(d["map"]), d["page"], d["map"], d["bells"], blink)
         # Badges carried over from the pre-switchboard header; a separate
         # ruling in this plan removed the pad's mute *gesture*, so dropping
         # its indicator too would take away the control and its display in
@@ -118,7 +143,12 @@ class Cockpit(App):
         if self.flags["submap"]:
             badges.append("[" + self.flags["submap"] + "]")
         mode = ("P%d/%d" % (d["page"] + 1, d["pages"])) if d["knob"] == "page" else "VOL"
-        self.screen.set_header(header_line("nexus", badges, mode, WIDTH_CHARS))
+        header = header_line("nexus", badges, mode, WIDTH_CHARS)
+        # set_header touches every glyph in the inverted bar; skip the write
+        # when the text hasn't changed instead of re-setting it every tick.
+        if header != self._header_text:
+            self._header_text = header
+            self.screen.set_header(header)
         # Attention ledger: what is waiting on you, machine-wide. Blank lines
         # mean all clear -- a glanceable state in itself, and it reads across a
         # locked screen because the pad is a display hyprlock cannot cover.
@@ -134,16 +164,26 @@ class Cockpit(App):
         # its own (footer is now the minimap's counts column).
         if waiting:
             text = " | ".join(c.get("s", "?") + ": " + c.get("title", "") for c in waiting)
-            self.screen.line1.text = marquee("* " + text, WIDTH_CHARS, now)
+            line1 = marquee("* " + text, WIDTH_CHARS, now)
         elif busy:
-            self.screen.line1.text = "%d working" % busy
+            line1 = "%d working" % busy
         else:
-            self.screen.line1.text = ""
+            line1 = ""
         if bells:
             text = " ".join(b.get("s", "?") + ":" + str(b.get("i", "?")) for b in bells)
-            self.screen.line2.text = marquee("! " + text, WIDTH_CHARS, now)
+            line2 = marquee("! " + text, WIDTH_CHARS, now)
         else:
-            self.screen.line2.text = ""
+            line2 = ""
+        # marquee legitimately returns a new string most ticks while scrolling,
+        # so this is gated on the value actually changing, not on time -- it
+        # still skips the write whenever a marquee isn't moving (or there's
+        # nothing to show) without ever holding a scroll still.
+        if line1 != self._line1_text:
+            self._line1_text = line1
+            self.screen.line1.text = line1
+        if line2 != self._line2_text:
+            self._line2_text = line2
+            self.screen.line2.text = line2
         # Minimap counts column (spec 8.2): total occupied slots on the pages
         # the minimap can draw, plus how many unacked bells are on a page that
         # isn't the one currently on the keys -- the number the blinking cell
