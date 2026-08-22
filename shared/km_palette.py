@@ -38,15 +38,6 @@ def urgent_factor(phase):
     """Pulse factor for a bell/urgent key: never below an occupied key."""
     return URGENT_FLOOR + (1.0 - URGENT_FLOOR) * phase
 
-# Canonical Okabe-Ito hues in canonical order. Window index N always gets bin N.
-# Used by ctx_key_color (the split-deck bottom half) and firmware/apps/coach.py
-# for stage colours. LEDs are emissive, so the saturated canonical values render
-# truest.
-#
-# NOTE: The tmux status bar no longer uses these. As of colorhash 2026-08-21,
-# @wsid_win1..6 take darkFg/lightFg directly from ~/.config/colorhash/palette.json.
-INDEX_BINS = ("E69F00", "56B4E9", "009E73", "F0E442", "0072B2", "D55E00")
-
 
 def hex_to_int(s):
     s = s.lstrip("#")
@@ -86,18 +77,6 @@ def ws_key_color(state, ws_hex, pal, phase=0.0):
     return 0
 
 
-def ctx_key_color(item, pal, phase=0.0):
-    """Bottom-half key color for one ctx slot item; None (empty slot) -> off."""
-    if item is None:
-        return 0
-    if item.get("bell"):
-        return scale(_c(pal, "red"), urgent_factor(phase))
-    c = hex_to_int(INDEX_BINS[(item["i"] - 1) % len(INDEX_BINS)])
-    if item.get("active"):
-        return c
-    return scale(c, OCCUPIED_SCALE)
-
-
 # ---- deck key states (spec section 5.3) ------------------------------------
 # Hue carries workspace identity and NOTHING else. States differ by brightness
 # and animation only -- which is also the only encoding that survives Chris's
@@ -130,9 +109,9 @@ def state_factor(state, phase=0.0):
 
 
 def deck_key_color(state, ws_hex, phase=0.0):
-    """Final pixel value for a deck key. Third of the ws_key_color /
-    ctx_key_color family: colour decisions live here so the firmware only
-    assigns, and so they are testable -- CircuitPython does not run pytest."""
+    """Final pixel value for a deck key. Sibling of ws_key_color: colour
+    decisions live here so the firmware only assigns, and so they are
+    testable -- CircuitPython does not run pytest."""
     if state == "empty" or not ws_hex:
         return 0x000000
     return scale(hex_to_int(ws_hex), state_factor(state, phase))

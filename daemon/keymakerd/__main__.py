@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import hyprland, ledtest, tmux, volume
-from .coach_store import CoachStore
 from .deck_store import DeckStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher, resolve_theme_dir
@@ -72,7 +71,6 @@ class Supervisor:
         self.palette = None
         self.ctx = _ctx_none()
         self.ledger = _ledger_none()
-        self.coach = CoachStore(cfg.state_dir / "coach.json")
         self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
         self.deck = km_deck.Deck(self.deck_store.load())
         self.knob_mode = "vol"      # short-press toggles; rotation is volume first
@@ -134,7 +132,6 @@ class Supervisor:
         except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
-        self.link.send(self.coach.state_msg())
 
     def _on_link_down(self):
         # Force the next poll to re-emit even if nothing about the windows has
@@ -271,8 +268,6 @@ class Supervisor:
                 self._spawn(self._volume(d, False), "volume")
         elif t == "click":
             self.on_knob_press()
-        elif t == "coach":
-            self._spawn(self._coach_session(msg.get("session")), "coach")
 
     async def _dispatch(self, cmd):
         # Swallow transient IPC failures WITHOUT clearing _instance:
@@ -300,15 +295,6 @@ class Supervisor:
         except (OSError, ValueError, IndexError):
             pass
         self.link.send(self._flags_msg())
-
-    async def _coach_session(self, session):
-        if not isinstance(session, dict):
-            return
-        try:
-            self.coach.append(session)
-        except Exception as e:
-            print(f"keymakerd: coach store failed: {e!r}", flush=True)
-        self.link.send(self.coach.state_msg())
 
     # ---- hyprland side --------------------------------------------
     async def _hypr_events(self):

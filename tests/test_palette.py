@@ -38,24 +38,6 @@ def test_ws_key_color_falls_back_without_color_or_for_urgent():
     assert kp.ws_key_color("empty", "e14b00", pal) == 0
 
 
-def test_ctx_key_color_states():
-    pal = {"accent": "FF0000", "red": "00FF00"}
-    active = {"i": 1, "name": "a", "active": True, "bell": False}
-    inactive = {"i": 2, "name": "b", "active": False, "bell": False}
-    belled = {"i": 3, "name": "c", "active": False, "bell": True}
-    assert kp.ctx_key_color(active, pal) == kp.hex_to_int(kp.INDEX_BINS[0])
-    assert kp.ctx_key_color(inactive, pal) == kp.scale(
-        kp.hex_to_int(kp.INDEX_BINS[1]), kp.OCCUPIED_SCALE)
-    assert kp.ctx_key_color(belled, pal, phase=1.0) == 0x00FF00   # theme red, full
-    assert kp.ctx_key_color(None, pal) == 0                       # empty slot: off
-
-
-def test_ctx_key_color_index_wraps():
-    pal = {}
-    item = {"i": 7, "name": "x", "active": True, "bell": False}
-    assert kp.ctx_key_color(item, pal) == kp.hex_to_int(kp.INDEX_BINS[0])
-
-
 # --- the pad's usable light budget: measured on hardware, not derived ---
 #
 # BRIGHTNESS lives in firmware/pad/framework.py and is applied by neopixel to
