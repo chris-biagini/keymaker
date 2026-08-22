@@ -27,22 +27,37 @@ def test_find_instance_dir_picks_dir_with_socket(tmp_path):
     assert find_instance_dir(tmp_path) == b
 
 
-def test_refresh_produces_ws_message_once():
+def test_refresh_sends_nothing_and_updates_daemon_internal_state():
+    """refresh() is a mutator. It used to return a {"t": "ws"} message that no
+    firmware branch ever read; the pad renders the deck and nothing else."""
     s = HyprState()
-    msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    assert {"t": "ws", "active": 1, "occupied": [1, 5], "urgent": [], "colors": {}, "names": {}} in msgs
-    assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) == []   # no change, no msgs
+    assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) is None
+    assert s.active == 1
+    assert s.addr == ""            # WIN carries no address
+    assert s.clients == CLIENTS    # retained for the deck poll
+
+
+def test_hyprstate_exposes_no_workspace_wire_surface():
+    """Regression guard for the write-only wire this replaced. If a future change
+    wants to tell the pad about workspaces, it needs a firmware consumer FIRST --
+    the old one shipped a message on every refresh for months with no reader."""
+    s = HyprState()
+    for gone in ("snapshot", "_ws_msg", "occupied", "urgent_ws", "colors",
+                 "names", "light"):
+        assert not hasattr(s, gone), f"{gone} is back without a consumer"
 
 
 def test_urgent_event_address_is_normalized_and_cleared_on_focus():
+    # The surviving consumer of urgency is deck_bells, which reads _urgent_addrs
+    # directly -- addresses, not the workspace-id list the ws message carried.
     s = HyprState()
     s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
     needs_refresh, _ = s.handle_event("urgent", "5f2280")   # event has NO 0x prefix
     assert needs_refresh
-    msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    assert msgs[0]["urgent"] == [5]
-    msgs = s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)   # focusing ws 5 clears it
-    assert msgs[0]["urgent"] == []
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert s._urgent_addrs == {"5f2280"}
+    s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)          # focusing ws 5 clears it
+    assert s._urgent_addrs == set()
 
 
 def test_bell_event_is_treated_as_urgent():
@@ -50,10 +65,10 @@ def test_bell_event_is_treated_as_urgent():
     s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
     needs_refresh, _ = s.handle_event("bell", "5f2280")
     assert needs_refresh
-    msgs = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    assert msgs[0]["urgent"] == [5]
-    msgs = s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)
-    assert msgs[0]["urgent"] == []
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert s._urgent_addrs == {"5f2280"}
+    s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)
+    assert s._urgent_addrs == set()
 
 
 def test_submap_and_screencast_touch_flags_only():
@@ -63,13 +78,6 @@ def test_submap_and_screencast_touch_flags_only():
     assert s.handle_event("submap", "resize") == (False, False)
     assert s.handle_event("screencast", "1,0") == (False, True)
     assert s.screencast is True
-
-
-def test_snapshot_always_returns_the_ws_message():
-    s = HyprState()
-    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
-    ts = sorted(m["t"] for m in s.snapshot())
-    assert ts == ["ws"]
 
 
 def test_fnv1a32_matches_the_colorhash_contract():
@@ -96,8 +104,6 @@ def test_ws_color_hashes_plain_name():
     from keymakerd.hyprland import ws_color
     assert ws_color("mirepoix") == "e16000"          # cell 6, led surface
     assert ws_color("oracle") == "ffbc63"            # cell 1, led surface
-    # `light` is accepted and ignored: LEDs have no theme ground to contrast against.
-    assert ws_color("mirepoix", light=True) == ws_color("mirepoix")
     assert ws_color("4") is None                     # unnamed: bare id, no color
     assert ws_color("") is None
     assert ws_color(None) is None
@@ -140,36 +146,14 @@ def test_ws_color_hashes_sanitized_name():
     assert ws_color("wacky sax") == ws_color("wacky-sax")
 
 
-def test_refresh_includes_workspace_colors():
-    s = HyprState()
-    wss = [
-        {"id": 2, "windows": 1, "name": "mirepoix"},
-        {"id": 3, "windows": 1, "name": "oracle"},
-        {"id": 4, "windows": 1, "name": "4"},
-    ]
-    msgs = s.refresh(wss, {"id": 2}, None, [])
-    ws = next(m for m in msgs if m["t"] == "ws")
-    assert ws["colors"] == {"2": "e16000", "3": "ffbc63"}
-
-
-def test_ws_label_plain_names():
-    from keymakerd.hyprland import ws_label
-    assert ws_label("mirepoix") == "mirepoix"
-    assert ws_label("4") is None            # unnamed: bare id
-    assert ws_label("") is None
-    assert ws_label(None) is None
-
-
-def test_refresh_includes_workspace_names():
-    s = HyprState()
-    wss = [
-        {"id": 2, "windows": 1, "name": "mirepoix"},
-        {"id": 3, "windows": 1, "name": "oracle"},
-        {"id": 4, "windows": 1, "name": "4"},
-    ]
-    msgs = s.refresh(wss, {"id": 2}, None, [])
-    ws = next(m for m in msgs if m["t"] == "ws")
-    assert ws["names"] == {"2": "mirepoix", "3": "oracle"}
+def test_deck_colors_keys_by_name_and_neutralises_unnamed_workspaces():
+    """Workspace color reaches the pad only through the deck message, keyed by
+    workspace NAME. refresh() used to also broadcast a per-id color table; it had
+    no reader. An unnamed (bare-digit) workspace has no identity to hash, so it
+    renders neutral rather than being dropped -- a missing key would leave the
+    slot with no color at all."""
+    assert hyprland.deck_colors([{"ws": "mirepoix"}, {"ws": "oracle"}, {"ws": "4"}]) == {
+        "mirepoix": "e16000", "oracle": "ffbc63", "4": hyprland.NEUTRAL_COLOR}
 
 
 FG_CLIENTS = [

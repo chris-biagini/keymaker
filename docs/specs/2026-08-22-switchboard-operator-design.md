@@ -306,6 +306,17 @@ All other fields are unchanged.
 
 `ctx`, `ledger`, `win` (daemon → pad); `click`, `coach` (pad → daemon).
 
+> **Amended 2026-08-22, after this spec shipped:** `ws` (daemon → pad) is also
+> gone. It survived this pass because it looked alive — it was recomputed and
+> sent on every refresh and on every connect — but `Cockpit.on_msg` only ever
+> branched on `deck` and `flags`, so it had no reader, exactly like `win` above.
+> Removing it took `HyprState.occupied` / `.urgent_ws` / `.colors` / `.names`,
+> `ws_label`, and `snapshot()` with it, and `refresh()` became a pure mutator.
+> `HyprState.active` and `_urgent_addrs` are NOT part of that set: they resolve
+> focus and prune stale bells. It also took `HyprState.light` — whose only reader
+> was a `ws_color()` parameter documented as accepted-and-ignored, making the
+> whole theme-lightness chain inert.
+
 ## 8. Code structure
 
 Geometry and content rules are pure functions in `shared/km_deck.py`, callable

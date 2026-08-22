@@ -66,7 +66,7 @@ def session_name(label):
     return s.strip("-")
 
 
-def ws_color(name, light=False):
+def ws_color(name):
     """colorhash(sanitized session name) -> LED hex, or None when there is no color.
 
     Hashes the SANITIZED form so the bar (which hashes plain workspace names)
@@ -74,11 +74,13 @@ def ws_color(name, light=False):
     when a name needs sanitizing, e.g. workspace "wacky sax" -> session
     "wacky-sax".
 
-    `light` is accepted and IGNORED. It selected between two theme-tuned palettes
-    under the old system; colorhash's `led` surface is a physical rendering on
-    WS2812s, which have no theme ground to contrast against. The parameter stays
-    so callers (and _on_palette's theme-change refresh) need no edit, and so a
-    future surface that IS theme-dependent has somewhere to land.
+    There is deliberately no `light` parameter. One used to select between two
+    theme-tuned palettes; colorhash's `led` surface is a physical rendering on
+    WS2812s, which have no theme ground to contrast against, so it was accepted
+    and ignored -- and an ignored parameter kept a whole theme-lightness chain
+    (HyprState.light, _on_palette's light.mode probe) looking load-bearing when
+    nothing read it. Should a theme-dependent surface ever land, give it a
+    parameter then.
     """
     if not name or name.isdigit():
         return None
@@ -86,16 +88,6 @@ def ws_color(name, light=False):
     if not pal:
         return None
     return pal[fnv1a32(session_name(name)) % len(pal)]
-
-
-def ws_label(name):
-    """Human label from a workspace name, or None for unnamed (bare-digit) names."""
-    if not name:
-        return None
-    text = name.strip()
-    if not text or text.isdigit():
-        return None
-    return text
 
 
 REFRESH_EVENTS = {
@@ -137,12 +129,11 @@ def parse_event(line):
 
 class HyprState:
     def __init__(self):
+        # The workspace the user is on. Daemon-internal: it resolves the focused
+        # window (supervisor._focused_window_id) and prunes stale bells below.
+        # Nothing about workspaces is sent to the pad -- the deck is the only
+        # thing the pad renders, and a deck slot carries its own workspace name.
         self.active = 1
-        self.occupied = []
-        self.urgent_ws = []
-        self.colors = {}
-        self.names = {}
-        self.light = False
         self.addr = ""
         self.fg = {}          # ws id -> {"addr", "cls"} best ws-* client
         self.submap = ""
@@ -174,11 +165,16 @@ class HyprState:
         return name in REFRESH_EVENTS, False
 
     def refresh(self, workspaces, active_ws, active_win, clients):
-        msgs = []
+        """Re-read Hyprland's world into daemon-internal state. Sends nothing.
+
+        Returns None on purpose: this used to emit a {"t": "ws"} message and the
+        pad never had a branch that read one, so the whole workspace-state wire
+        was write-only. What survives here is what something downstream actually
+        consumes -- see each assignment.
+        """
         self.clients = clients
         self.workspaces = workspaces
         active = active_ws.get("id", 1)
-        occupied = sorted(w["id"] for w in workspaces if w.get("windows", 0) > 0)
         addr_ws = {
             str(c.get("address", "")).removeprefix("0x"): c.get("workspace", {}).get("id")
             for c in clients
@@ -187,12 +183,12 @@ class HyprState:
             a for a in self._urgent_addrs
             if addr_ws.get(a) is not None and addr_ws[a] != active
         }
-        urgent = sorted({addr_ws[a] for a in self._urgent_addrs})
+        # Note what that prune consumes: `active`. A bell is forgotten once you
+        # are looking at the workspace that rang, so the set is not merely
+        # accumulated -- deck_bells reads it every poll.
         # Per-workspace ws-* client, for the workspace-aware bottom deck.
         # focusHistoryID 0 is the focused window, ascending = less recent, so the
         # lowest id per workspace is "the terminal you were most recently in there".
-        # Daemon-internal, never sent to the pad, so it is deliberately NOT part
-        # of the changed-state comparison below.
         fg = {}
         for c in clients:
             if not str(c.get("class", "")).startswith("ws-"):
@@ -205,31 +201,12 @@ class HyprState:
                 fg[ws_id] = (hist, {"addr": str(c.get("address", "")),
                                     "cls": str(c.get("class", ""))})
         self.fg = {ws: entry for ws, (_, entry) in fg.items()}
-        colors = {}
-        for w in workspaces:
-            c = ws_color(w.get("name"), light=self.light)
-            if c is not None:
-                colors[str(w["id"])] = c
-        names = {}
-        for w in workspaces:
-            lbl = ws_label(w.get("name"))
-            if lbl is not None:
-                names[str(w["id"])] = lbl
-        if (active, occupied, urgent, colors, names) != (
-                self.active, self.occupied, self.urgent_ws, self.colors, self.names):
-            self.active, self.occupied, self.urgent_ws, self.colors, self.names = (
-                active, occupied, urgent, colors, names)
-            msgs.append(self._ws_msg())
+        # Assigned unconditionally. These used to sit behind a "did anything
+        # change?" guard, which existed only to decide whether to emit a
+        # message; with no message to emit, the guard bought nothing and cost a
+        # way to be subtly wrong.
+        self.active = active
         self.addr = str((active_win or {}).get("address", ""))
-        return msgs
-
-    def snapshot(self):
-        return [self._ws_msg()]
-
-    def _ws_msg(self):
-        return {"t": "ws", "active": self.active, "occupied": self.occupied,
-                "urgent": self.urgent_ws, "colors": self.colors,
-                "names": self.names}
 
 
 # A key is for something that can ASK FOR YOU and that you can GO TO locally.

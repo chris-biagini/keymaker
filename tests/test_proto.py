@@ -7,7 +7,7 @@ def test_encode_is_compact_jsonl():
 
 def test_feed_single_message():
     c = km_proto.LineCodec()
-    assert c.feed(b'{"t":"ws","active":3}\n') == [{"t": "ws", "active": 3}]
+    assert c.feed(b'{"t":"deck","page":3}\n') == [{"t": "deck", "page": 3}]
 
 
 def test_feed_partial_then_rest():
