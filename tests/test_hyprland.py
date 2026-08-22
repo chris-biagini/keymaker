@@ -258,3 +258,22 @@ def test_ws_color_itself_is_unchanged_and_still_returns_none():
     # The neutral belongs to the deck path only; the workspace pill still wants
     # None for an unnamed workspace so it can render nothing at all.
     assert hyprland.ws_color("4") is None
+
+
+def test_tmux_flag_wins_where_a_session_exists():
+    twins = [{"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails",
+              "active": False, "bell": True}]
+    # One BEL fires BOTH channels: tmux flags the window and foot rings the
+    # system bell for the whole ws-* client. Counting both would smear the alert
+    # across every key of that session.
+    got = hyprland.deck_bells(twins, {"aa"}, DECK_CLIENTS)
+    assert got == {"tmux:@2"}
+    assert "hypr:0xaa" not in got
+
+
+def test_hyprland_bell_is_authoritative_only_for_sessionless_clients():
+    assert hyprland.deck_bells([], {"cc"}, DECK_CLIENTS) == {"hypr:0xcc"}
+
+
+def test_no_bells_is_an_empty_set_not_none():
+    assert hyprland.deck_bells([], set(), DECK_CLIENTS) == set()

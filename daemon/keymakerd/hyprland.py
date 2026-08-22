@@ -283,3 +283,23 @@ def deck_windows(tmux_windows, clients, workspaces):
 def deck_colors(windows):
     """{workspace name: led hex} for a deck window list, white where unnamed."""
     return {win["ws"]: (ws_color(win["ws"]) or NEUTRAL_COLOR) for win in windows}
+
+
+def deck_bells(tmux_windows, urgent_addrs, clients):
+    """Window ids with an unacked bell. Spec section 6.1.
+
+    A single BEL inside a ws-* terminal fires BOTH channels: tmux sets
+    window_bell_flag, and foot rings the system bell for the surrounding client,
+    which Hyprland emits as `bell`. The tmux flag names the exact window; the
+    Hyprland event names only the terminal. So where a session exists the tmux
+    flag WINS and the Hyprland event is discarded -- otherwise one bell would
+    light the right key and smear across every key of that session.
+    """
+    out = {w["id"] for w in tmux_windows if w.get("bell")}
+    ws_addrs = {str(c.get("address", "")).removeprefix("0x")
+                for c in clients if str(c.get("class", "")).startswith("ws-")}
+    for addr in urgent_addrs:
+        if addr in ws_addrs:
+            continue
+        out.add("hypr:0x" + addr)
+    return out
