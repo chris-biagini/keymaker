@@ -41,6 +41,7 @@ class Supervisor:
         # them. Empty until the first deck poll lands, so an early tap is a no-op
         # rather than a KeyError.
         self._deck_twins = {}
+        self._deck_wins = []
         self._deck_ws_addr = {}
         # Last (colors, focused, bells) _poll_deck computed, so a knob gesture can
         # re-render the deck message SYNCHRONOUSLY instead of waiting up to
@@ -135,6 +136,20 @@ class Supervisor:
             self.deck_msg = msg
             self.link.send(msg)
 
+    def on_rekey(self):
+        """Drop every slot assignment and re-derive from workspace order.
+
+        Ghosts go too: a re-key is a fresh board, and a completion marker kept
+        against a slot that no longer means the same thing is worse than a lost
+        one. No service restart -- clearing deck-slots.json by hand and bouncing
+        the unit was only ever a way to reach this state.
+        """
+        self.deck.slots = {}
+        self.deck.ghosts = {}
+        self.deck.update(self._deck_wins)
+        self.save_deck()
+        self._resend_deck()
+
     def on_knob_turn(self, delta):
         pages = self.deck.page_count()
         self.deck_page = (self.deck_page + delta + pages) % pages
@@ -209,6 +224,8 @@ class Supervisor:
                 self._spawn(self._on_tap(n), "deck-tap")
         elif t == "dial":
             self.on_knob_turn(int(msg.get("d", 0)))
+        elif t == "rekey":
+            self.on_rekey()
 
     async def _dispatch(self, cmd):
         # Swallow transient IPC failures WITHOUT clearing _instance:
@@ -299,6 +316,7 @@ class Supervisor:
                 for c in self.state.clients if str(c.get("class", "")).startswith("ws-")
             }
             wins = hyprland.deck_windows(twins, self.state.clients)
+            self._deck_wins = wins
             before = dict(self.deck.slots)
             self.deck.update(wins)
             if self.deck.slots != before:

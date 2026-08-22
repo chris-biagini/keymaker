@@ -496,3 +496,19 @@ def test_poll_deck_tmux_outage_still_ghosts_tmux_windows_that_disappear(monkeypa
     slots, ghosts = asyncio.run(scenario())
     assert slots == {}
     assert ghosts == {0: {"ws": "mirepoix", "n": "1 rails"}}
+
+
+def test_rekey_clears_slots_and_ghosts_and_re_derives_in_order(tmp_path):
+    # Sticky allocation means a window keeps its first slot for life, so this
+    # is the ONLY way to reorder a board once assignments exist.
+    sup = _supervisor(tmp_path)
+    sup.deck.slots = {"tmux:@9": 0, "tmux:@1": 1}
+    sup.deck.ghosts = {5: {"ws": "gone", "n": "1 old"}}
+    sup.deck._last = {"tmux:@9": {"ws": "b", "n": "1 x"},
+                      "tmux:@1": {"ws": "a", "n": "1 y"}}
+    sup._deck_render_args = ({}, None, [])
+    sup._deck_wins = [{"id": "tmux:@1", "ws": "a", "n": "1 y"},
+                      {"id": "tmux:@9", "ws": "b", "n": "1 x"}]
+    sup.on_rekey()
+    assert sup.deck.slots == {"tmux:@1": 0, "tmux:@9": 1}
+    assert sup.deck.ghosts == {}

@@ -69,7 +69,27 @@ class Cockpit(App):
     def on_dial(self, delta):
         self.link.send({"t": "dial", "d": delta})
 
+    def on_enc(self, pressed, now):
+        if pressed:
+            self._enc_down = now
+            return
+        # Released. Fire only if the hold ran the full countdown; anything
+        # shorter is an abort, and an abort sends nothing at all.
+        if self._enc_down is not None:
+            held = ticks_diff(now, self._enc_down)
+            if held >= km_deck.REKEY_FIRE_MS:
+                self.link.send({"t": "rekey"})
+        self._enc_down = None
+        self._countdown = None
+
+    def _tick_countdown(self, now):
+        if self._enc_down is None:
+            self._countdown = None
+            return
+        self._countdown = km_deck.countdown_text(ticks_diff(now, self._enc_down))
+
     def tick(self, now):
+        self._tick_countdown(now)
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})
         self._draw_leds(now)          # every pass: urgent pulse animation
