@@ -1,10 +1,14 @@
-"""OLED layout: inverted header / two body lines / minimap strip with a
-right-hand counts column / idle card."""
+"""OLED layout: inverted header / focused window / four legend rows over a
+state-gutter bitmap. Spec section 5."""
 import displayio
 import terminalio
 from adafruit_display_text import label
 
+import km_deck
+
 WIDTH_CHARS = 21   # 128px / 6px font
+MAP_Y = 23         # bitmap origin; rows 23-61
+MAP_H = 39
 
 
 class Screen:
@@ -12,27 +16,24 @@ class Screen:
         self.group = displayio.Group()
         self.header = label.Label(terminalio.FONT, text="", x=0, y=6,
                                   color=0x000000, background_color=0xFFFFFF)
-        self.line1 = label.Label(terminalio.FONT, text="", x=0, y=20)
-        self.line2 = label.Label(terminalio.FONT, text="", x=0, y=32)
-        # Repurposed as the right-hand minimap counts column (see set_minimap
-        # callers) now that the minimap owns its own strip below line2.
-        self.footer = label.Label(terminalio.FONT, text="", x=96, y=52)
-        for l in (self.header, self.line1, self.line2, self.footer):
-            self.group.append(l)
-        # 94x22 mono, clear of the footer's counts column at x=96. A Bitmap is
-        # the cheapest surface for per-pixel work; the existing labels stay as
-        # labels. TileGrid at y=40 puts its rows at 40-61: below line2 (rows
-        # ~26-34 per the y-6..y+2 glyph band terminalio labels occupy) and
-        # inside the 64px panel.
-        self.map_bmp = displayio.Bitmap(94, 22, 2)
+        self.focus = label.Label(terminalio.FONT, text="", x=0, y=18)
+        # Legend text sits at x=5 so the 4px state gutter at x=1 stays clear.
+        # Rows are 10px apart, matching km_deck.GUTTER_PITCH_Y.
+        self.rows = [label.Label(terminalio.FONT, text="", x=5, y=29 + i * 10)
+                     for i in range(km_deck.LEGEND_ROWS)]
+        self.group.append(self.header)
+        self.group.append(self.focus)
+        for r in self.rows:
+            self.group.append(r)
+        self.map_bmp = displayio.Bitmap(128, MAP_H, 2)
         pal = displayio.Palette(2)
         pal[0] = 0x000000
         pal[1] = 0xFFFFFF
-        self.map_tile = displayio.TileGrid(self.map_bmp, pixel_shader=pal, x=0, y=40)
-        self.group.append(self.map_tile)
-        # Lit pixels currently on the bitmap, so set_minimap can paint the
-        # difference rather than clear and repaint. See km_deck.minimap_pixels.
-        self._map_lit = set()
+        self.group.append(displayio.TileGrid(self.map_bmp, pixel_shader=pal,
+                                             x=0, y=MAP_Y))
+        # Lit pixels currently on the bitmap, so set_gutters can paint the
+        # difference rather than clear and repaint. See km_deck.gutter_pixels.
+        self._lit = set()
         display.root_group = self.group
 
     def set_header(self, text):
@@ -40,33 +41,32 @@ class Screen:
         t = text[:WIDTH_CHARS]
         self.header.text = t + " " * (WIDTH_CHARS - len(t))
 
-    def set_minimap(self, pages, page, masks, bells, blink):
-        """One mini 3x4 deck per page. Spec section 8.2.
+    def set_focus(self, text):
+        self.focus.text = text[:WIDTH_CHARS]
 
-        Paints the DIFFERENCE against what is already on the bitmap -- never a
-        fill(0) first. displayio refreshes the panel on its own schedule
+    def set_legend(self, rows):
+        for i, r in enumerate(self.rows):
+            r.text = rows[i] if i < len(rows) else ""
+
+    def set_gutters(self, lit):
+        """Paint the DIFFERENCE against what is already on the bitmap.
+
+        Never a fill(0) first: displayio refreshes the panel on its own schedule
         (auto_refresh is on), so a clear-then-repaint hands it a blank frame to
-        scan out, which is what reads as a flicker. Only pixels that actually
-        change are written, so a redraw of an unchanged minimap touches nothing.
-
-        The geometry itself lives in km_deck.minimap_pixels, where pytest can
-        reach it; this method is only the diff and the writes.
+        scan out, which is what reads as a flicker. An unchanged frame writes
+        nothing at all.
         """
-        import km_deck
-        want = km_deck.minimap_pixels(pages, page, masks, bells, blink, y=0)
-        for x, y in self._map_lit - want:
+        for x, y in self._lit - lit:
             self.map_bmp[x, y] = 0
-        for x, y in want - self._map_lit:
+        for x, y in lit - self._lit:
             self.map_bmp[x, y] = 1
-        self._map_lit = want
+        self._lit = lit
 
     def idle_card(self):
         self.set_header("keymaker")
-        self.line1.text = "no link"
-        self.line2.text = ""
-        self.footer.text = ""
-        # Clear the minimap too: with the link down the deck it describes is
-        # stale, and leaving it lit next to "no link" claims windows we can no
-        # longer see. Goes through the same diff bookkeeping so the next
-        # set_minimap repaints from a correct notion of what is on the bitmap.
-        self.set_minimap(0, 0, (), (), False)
+        self.focus.text = "no link"
+        self.set_legend([""] * km_deck.LEGEND_ROWS)
+        # Clear the gutters too: with the link down the deck they describe is
+        # stale, and leaving them lit beside "no link" claims windows we can no
+        # longer see.
+        self.set_gutters(set())
