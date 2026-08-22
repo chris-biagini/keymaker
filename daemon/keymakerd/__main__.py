@@ -399,7 +399,12 @@ class Supervisor:
                 return          # no Hyprland snapshot yet; a wipe here would be a lie
             twins = await tmux.list_deck_windows()
             if twins is None:
-                return
+                # tmux unavailable (server down) is NOT "tmux has no windows":
+                # a bare terminal earns a key purely from state.clients and has
+                # nothing to do with tmux's health. Continue with an empty tmux
+                # side so the sessionless half of the deck still renders, rather
+                # than aborting the whole poll over an outage unrelated to it.
+                twins = []
             self._deck_twins = {w["id"]: w for w in twins}
             self._deck_ws_addr = {
                 str(c.get("class", ""))[3:]: str(c.get("address", ""))

@@ -766,3 +766,60 @@ def test_poll_deck_with_no_hyprland_snapshot_never_wipes_the_persisted_deck(monk
     assert after == before == {"tmux:@1": 0}
     saved = json.loads((tmp_path / "deck-slots.json").read_text())
     assert saved["slots"] == {"tmux:@1": 0}
+
+
+def test_poll_deck_survives_a_tmux_outage_without_blanking_bare_terminals(monkeypatch, tmp_path):
+    # I2: list_deck_windows() returns None when the tmux SERVER is down, not
+    # when it merely has no windows. A bare `foot` earns its key purely from
+    # state.clients and has nothing to do with tmux's health, so a tmux
+    # outage must not blank keys unrelated to tmux.
+    from keymakerd import tmux as tmuxmod
+
+    async def fake_list_none():
+        return None
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list_none)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sent = []
+        sup.link = type("L", (), {"send": staticmethod(lambda m: sent.append(m) or True)})()
+        sup.state.clients = [{"class": "foot", "address": "0xbare",
+                              "workspace": {"id": 1, "name": "home"}, "title": "bare"}]
+        await sup._poll_deck()
+        return sent, dict(sup.deck.slots)
+
+    sent, slots = asyncio.run(scenario())
+    deck_msgs = [m for m in sent if m["t"] == "deck"]
+    assert len(deck_msgs) == 1
+    assert deck_msgs[0]["slots"] == [{"i": 0, "c": 0, "n": "bare", "s": "live"}]
+    assert slots == {"hypr:0xbare": 0}
+
+
+def test_poll_deck_tmux_outage_still_ghosts_tmux_windows_that_disappear(monkeypatch, tmp_path):
+    # Guard against I2's fix reintroducing I1: with twins == [] (whether from a
+    # real empty tmux server or an outage) and a POPULATED client list,
+    # tmux-backed windows legitimately vanish from the deck and must ghost
+    # normally rather than being protected like the empty-clients case.
+    from keymakerd import tmux as tmuxmod
+
+    async def fake_list_none():
+        return None
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list_none)
+        cfg = Config(device="/dev/null", runtime_dir=tmp_path, home=tmp_path,
+                     state_dir=tmp_path)
+        sup = Supervisor(cfg)
+        sup.link = type("L", (), {"send": staticmethod(lambda m: True)})()
+        sup.deck.slots = {"tmux:@1": 0}
+        sup.deck._last = {"tmux:@1": {"ws": "mirepoix", "n": "1 rails"}}
+        sup.state.clients = [{"class": "ws-mirepoix", "address": "0xaaa",
+                              "workspace": {"id": 1, "name": "mirepoix"}}]
+        await sup._poll_deck()
+        return dict(sup.deck.slots), dict(sup.deck.ghosts)
+
+    slots, ghosts = asyncio.run(scenario())
+    assert slots == {}
+    assert ghosts == {0: {"ws": "mirepoix", "n": "1 rails"}}
