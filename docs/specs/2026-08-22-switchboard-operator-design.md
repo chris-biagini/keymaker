@@ -51,8 +51,13 @@ firmware deploy; they are not tracked in the repo.
 - `self.knob_mode`, `on_knob_press`, and the `knob_mode` branch in the `dial` handler
 - the `coach` and `click` message handlers
 - `_poll_ledger`, `_ledger_msg`, `_ledger_none`, `self.ledger`, and the `ledger` send
-- `_context`, `_ctx_none`, `self.ctx`, and the `ctx` send — the pre-switchboard
-  split-deck message, unused since the switchboard shipped
+- `_ctx_none`, `self.ctx`, and the `ctx` send — the pre-switchboard split-deck
+  message, unused since the switchboard shipped
+
+> `_context()` is **not** simply deleted. It is the shared poll loop: its body
+> computes `ctx`, then calls `_poll_deck()` and `_poll_ledger()`. Deleting the
+> function would silently take the deck poll with it. It is renamed `_poll_loop()`
+> and reduced to `sleep(CTX_POLL_S)` plus `await self._poll_deck()`.
 
 **`daemon/keymakerd/hyprland.py`**
 
@@ -94,8 +99,8 @@ N ms" but **"never touch hardware unconditionally per tick"** — the lesson beh
 
 | Input | Behavior |
 |---|---|
-| Key tap | Focus that window |
-| Key hold | Dismiss the ghost in that slot |
+| Key tap | Dismiss the ghost in that slot if there is one; otherwise focus that window |
+| Key hold | Nothing — `act == "hold"` is received and ignored |
 | Knob turn | Change page (always — there is no other mode) |
 | Encoder short-press | **Unassigned.** No handler, no message sent |
 | Encoder long-press | Re-key countdown (§6) |
@@ -241,11 +246,14 @@ same thing would be worse than losing them.
 **Added:** `"focus"` — the focused window as a pre-trimmed display string
 (`"<workspace> <window>"`), or `""` when nothing terminal is focused.
 
-Computed daemon-side and sent at top level rather than derived pad-side from the
-focused slot, because the focused window may be on a page the user is not
-viewing; deriving it from `slots` would blank the row exactly when it is most
-wanted. Cost is roughly 25 bytes against `LineCodec`'s 2048-byte cap, whose
-measured worst case is ~1028 bytes.
+Sent at top level rather than derived pad-side from the focused slot, because the
+focused window may be on a page the user is not viewing; deriving it from `slots`
+would blank the row exactly when it is most wanted. Cost is roughly 25 bytes
+against `LineCodec`'s 2048-byte cap, whose measured worst case is ~1028 bytes.
+
+It is composed inside `Deck.message` from `Deck._last`, which already holds every
+window's metadata regardless of page — so no daemon-side plumbing is needed and
+the daemon's `_deck_msg` only loses its `knob` argument.
 
 **Removed:** `"knob"` — there is only one knob mode.
 
