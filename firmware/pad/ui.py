@@ -37,8 +37,16 @@ class Screen:
         t = text[:WIDTH_CHARS]
         self.header.text = t + " " * (WIDTH_CHARS - len(t))
 
-    def set_minimap(self, pages, page, counts, bells, blink):
-        """One mini 3x4 deck per page. Spec section 8.2."""
+    def set_minimap(self, pages, page, masks, bells, blink):
+        """One mini 3x4 deck per page. Spec section 8.2.
+
+        `masks` is a per-page bitmask (km_deck.Deck.message's `map`): bit i set
+        means slot i of that page is occupied. A cell is drawn only for a slot
+        the mask actually claims -- matching bells, which draw at their real
+        global slot -- so a sparse page (a dismissed mid-page ghost, a daemon
+        restart that drops windows without ghosts) never shows a filled cell
+        where nothing lives.
+        """
         import km_deck
         self.map_bmp.fill(0)
         boxes = km_deck.minimap_boxes(pages, y=0)
@@ -55,8 +63,11 @@ class Screen:
                 for dy in range(h):
                     self.map_bmp[x, y + dy] = 1
                     self.map_bmp[x + w - 1, y + dy] = 1
-            for i in range(min(counts[p] if p < len(counts) else 0, 12)):
-                cx, cy = km_deck.minimap_cell(p * 12 + i, box)
+            mask = masks[p] if p < len(masks) else 0
+            for i in range(km_deck.SLOTS_PER_PAGE):
+                if not mask >> i & 1:
+                    continue
+                cx, cy = km_deck.minimap_cell(p * km_deck.SLOTS_PER_PAGE + i, box)
                 for dx in range(2):
                     for dy in range(2):
                         self.map_bmp[cx + dx, cy + dy] = 1
@@ -64,7 +75,7 @@ class Screen:
         # cell and reads as different even when caught mid-blink.
         if blink:
             for gslot in bells:
-                p = gslot // 12
+                p = gslot // km_deck.SLOTS_PER_PAGE
                 if p >= len(boxes):
                     continue
                 cx, cy = km_deck.minimap_cell(gslot, boxes[p])

@@ -3,6 +3,7 @@ terminal window, one page (12 slots) at a time; knob pages or adjusts volume
 depending on daemon-side mode; OLED = identity + attention ledger."""
 from adafruit_ticks import ticks_diff, ticks_ms
 
+import km_deck
 import km_palette
 from km_keys import KeyTracker
 from km_text import header_line, marquee
@@ -65,7 +66,7 @@ class Cockpit(App):
         # there is no _pulse_phase helper.
         phase = (now % 1000) / 1000
         phase = phase * 2 if phase < 0.5 else (1 - phase) * 2
-        for i in range(12):
+        for i in range(km_deck.SLOTS_PER_PAGE):
             self.pad.pixels[i] = 0x000000
         if not self.link.up:
             return
@@ -132,9 +133,11 @@ class Cockpit(App):
         # Minimap counts column (spec 8.2): total occupied slots on the pages
         # the minimap can draw, plus how many unacked bells are on a page that
         # isn't the one currently on the keys -- the number the blinking cell
-        # alone can't convey once it's off-page.
-        total = sum(d["map"])
-        off_page = sum(1 for g in d["bells"] if g // 12 != d["page"])
+        # alone can't convey once it's off-page. `map` is a per-page bitmask
+        # (km_deck.Deck.message), so the total is a popcount, not a sum --
+        # bin() is available on CircuitPython.
+        total = sum(bin(m).count("1") for m in d["map"])
+        off_page = sum(1 for g in d["bells"] if g // km_deck.SLOTS_PER_PAGE != d["page"])
         self.screen.footer.text = ("%d+%d!" % (total, off_page))[:5] if off_page else str(total)[:5]
 
     def _draw_all(self, now):

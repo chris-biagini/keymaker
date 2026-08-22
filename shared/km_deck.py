@@ -95,16 +95,21 @@ class Deck:
             slots.append({"i": slot - lo, "c": names.index(meta["ws"]),
                           "n": meta["n"][:name_max], "s": state})
 
+        # `map` is a per-page BITMASK, not a count: spec 8.2 says "filled cell =
+        # slot occupied", and a count draws the first N cells of a page while
+        # bells draw at the slot's ACTUAL position -- disagreeing wherever a
+        # page is sparse (a dismissed mid-page ghost, a daemon restart that
+        # drops dead windows without ghosts), which is routine, not rare.
         pages = self.page_count()
-        counts = [0] * min(pages, MINIMAP_MAX_PAGES)
+        masks = [0] * min(pages, MINIMAP_MAX_PAGES)
         for slot in by_slot:
             page_idx = slot // SLOTS_PER_PAGE
             if page_idx < MINIMAP_MAX_PAGES:
-                counts[page_idx] += 1
+                masks[page_idx] |= 1 << (slot % SLOTS_PER_PAGE)
         return {
             "t": "deck", "page": page, "pages": pages, "knob": knob,
             "ws": [[n[:ws_max], colors.get(n, "ffffff")] for n in names],
-            "slots": slots, "map": counts,
+            "slots": slots, "map": masks,
             "bells": sorted(s for s in (self.slots[w] for w in bells if w in self.slots) if s < MINIMAP_MAX_PAGES * SLOTS_PER_PAGE),
         }
 

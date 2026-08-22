@@ -103,7 +103,24 @@ def test_bells_are_global_slot_numbers_so_offpage_alerts_survive():
     m = d.message(page=0, knob="page", colors={"a": "ffffff"}, bells=["tmux:@15"])
     assert m["bells"] == [15]                  # slot 15 lives on page 1, not shown
     assert all(s["i"] < 12 for s in m["slots"])
-    assert m["map"] == [12, 8]                 # occupied count per page
+    # `map` is a per-page BITMASK, not a count: page 0 has all 12 slots
+    # occupied (bits 0-11 set), page 1 has slots 0-7 of its own range occupied.
+    assert m["map"] == [0xFFF, 0xFF]
+
+
+def test_map_is_a_bitmask_not_a_count_so_sparse_pages_agree_with_bells():
+    # I3: a count drew the first N cells of a page while bells draw at the
+    # slot's ACTUAL position -- disagreeing whenever occupied slots aren't a
+    # contiguous run from 0, which is routine (a slot restored at a high
+    # number, a dismissed mid-page ghost). Slots 0 and 7 occupied, matching
+    # the finding's own example: a count-based map would show TWO filled
+    # cells at positions 0 and 1 -- neither of which is slot 7, where the
+    # bell actually lives.
+    d = km_deck.Deck({"tmux:@1": 0, "tmux:@2": 7})
+    d.update([w("tmux:@1", "a", "1"), w("tmux:@2", "a", "2")])
+    m = d.message(page=0, knob="vol", colors={"a": "ffffff"}, bells=["tmux:@2"])
+    assert m["map"] == [0b10000001]             # bits 0 and 7 set, nothing between
+    assert m["bells"] == [7]
 
 
 def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
@@ -123,8 +140,12 @@ def test_names_are_trimmed_so_the_wire_stays_under_the_codec_cap():
                       bells=["tmux:@%d" % i for i in range(win_count)])
         # Workspace names are trimmed to ws_max (default 12).
         assert all(len(ws[0]) <= 12 for ws in m["ws"]), "workspace names must be trimmed"
-        # Map and bells are bounded by minimap geometry.
+        # Map and bells are bounded by minimap geometry. `map` is a per-page
+        # bitmask (12 bits) now, not a count -- still at most 4 decimal digits
+        # (0-4095) on the wire, so it does not regress the size this test
+        # exists to guard.
         assert len(m["map"]) <= 5, "map must fit on screen (MINIMAP_MAX_PAGES=5)"
+        assert all(0 <= mv <= 0xFFF for mv in m["map"]), "map entries are 12-bit masks"
         assert all(s < 60 for s in m["bells"]), "all bells must be within drawable pages"
         encoded = km_proto.encode(m)
         peak_bytes = max(peak_bytes, len(encoded))
