@@ -309,3 +309,30 @@ def test_hyprland_bell_is_authoritative_only_for_sessionless_clients():
 
 def test_no_bells_is_an_empty_set_not_none():
     assert hyprland.deck_bells([], set(), DECK_CLIENTS) == set()
+
+
+def test_deck_windows_survives_a_client_with_no_workspace_id():
+    # Hyprland always supplies an integer id for a normal client, but deck_windows
+    # SORTS on it, so a missing one would raise TypeError against real ints.
+    # _poll_deck catches Exception, so the symptom would be a deck that silently
+    # stops updating -- degrade to "sorts last" instead of crashing.
+    clients = [
+        {"address": "0xc", "class": "foot", "workspace": {"name": "x"}, "title": "no-id"},
+        {"address": "0xd", "class": "foot", "workspace": {"id": 1, "name": "y"},
+         "title": "has-id"},
+    ]
+    got = hyprland.deck_windows([], clients)
+    assert [w["n"] for w in got] == ["has-id", "no-id"]
+
+
+def test_deck_windows_rejects_a_bool_workspace_id():
+    # bool is an int subclass, so isinstance(True, int) passes a naive guard and
+    # True would sort as workspace 1 rather than last.
+    clients = [
+        {"address": "0xc", "class": "foot", "workspace": {"id": True, "name": "b"},
+         "title": "boolish"},
+        {"address": "0xd", "class": "foot", "workspace": {"id": 2, "name": "y"},
+         "title": "real"},
+    ]
+    got = hyprland.deck_windows([], clients)
+    assert [w["n"] for w in got] == ["real", "boolish"]

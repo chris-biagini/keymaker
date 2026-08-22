@@ -254,6 +254,22 @@ TERMINAL_CLASSES = ("foot", "footclient", "alacritty", "kitty", "ghostty")
 NEUTRAL_COLOR = "ffffff"
 
 
+WS_ID_LAST = 1 << 30      # sorts after any real Hyprland workspace id
+
+
+def _ws_sort_id(wsobj):
+    """Workspace id for ordering, or a sentinel that sorts last.
+
+    Hyprland always supplies an integer id for a normal client, but the deck sorts
+    on this field and a missing or non-integer one would raise TypeError comparing
+    against real ints -- which _poll_deck catches, so the symptom would be a deck
+    that silently stops updating rather than anything visible. Degrade to "put it
+    at the end" instead. bool is excluded because it is an int subclass.
+    """
+    v = wsobj.get("id") if isinstance(wsobj, dict) else None
+    return v if isinstance(v, int) and not isinstance(v, bool) else WS_ID_LAST
+
+
 def _is_terminal(cls):
     c = str(cls or "").lower()
     return c in TERMINAL_CLASSES or c.startswith("ws-")
@@ -280,7 +296,7 @@ def deck_windows(tmux_windows, clients):
         cls = str(c.get("class", ""))
         if cls.startswith("ws-"):
             wsobj = c.get("workspace", {})
-            ws_of_session[cls[3:]] = (wsobj.get("id"), str(wsobj.get("name", "")))
+            ws_of_session[cls[3:]] = (_ws_sort_id(wsobj), str(wsobj.get("name", "")))
             used_addrs.add(str(c.get("address", "")))
 
     entries = []
@@ -296,8 +312,7 @@ def deck_windows(tmux_windows, clients):
         addr = str(c.get("address", ""))
         if addr in used_addrs or not _is_terminal(c.get("class")):
             continue
-        ws_id = c.get("workspace", {}).get("id")
-        entries.append(((ws_id, 1, addr), {
+        entries.append(((_ws_sort_id(c.get("workspace", {})), 1, addr), {
             "id": "hypr:" + addr,
             "ws": str(c.get("workspace", {}).get("name", "")),
             "n": str(c.get("title", "") or c.get("class", ""))}))
