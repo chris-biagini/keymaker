@@ -7,7 +7,7 @@ static layers cost zero work; no live bitmap is ever cleared wholesale.
 
 Layer order, bottom to top (see Screen.__init__):
 
-  0  rain     the rain TileGrid (also the no-link base)
+  0  rain     the rain TileGrid
   1  wall     the bell wall's numerals (shown only in "ringing")
   2  marquee  the workspace-switch wipe numeral
   3  badges   REC + [submap] + the "no link" tag; topmost, composited last
@@ -20,6 +20,15 @@ marquee can never wipe over it anyway -- a marquee needs a live link to fire.)
 Every layer's palette makes color 0 transparent, so the layers composite
 rather than occlude: the marquee slides over whatever base state is live,
 and the badges sit on top of everything.
+
+Layer *visibility* is derived, never assigned ad hoc: `_sync_layers` is the
+single place that decides which of rain/wall/no-link is showing, from
+`self._weather` and whether the wall has anything in it. That is what makes
+the set_weather/set_bells ordering contract safe -- a caller that unhides
+"ringing" before the wall is populated gets rain, not a blank panel, and
+`set_bells` unhides the wall itself once it has numerals to show. Callers
+should still prefer set_bells-then-set_weather; the derivation is the
+belt to that suspenders.
 
 This module is not host-testable (displayio is firmware-only). It is
 therefore written to be mechanical and obvious; anything non-local is
@@ -185,6 +194,7 @@ class Screen:
 
         # state caches -- write hardware only on change
         self._weather = None
+        self._order = None
         self._flags = (None, None)
         self._submap_text = None
         self._clock = km_weather.FrameClock(FRAME_MS, ticks_ms(),
@@ -192,26 +202,54 @@ class Screen:
         self._rain_acc = 0
 
     # ---- state ---------------------------------------------------------
+    def _sync_layers(self):
+        """Derive which base layer shows, from weather + wall contents.
+
+        The caller must already have the panel suspended: this makes up to
+        three visibility flips and must not be scanned out half-applied.
+
+        The wall shows only when the state is "ringing" AND it actually has
+        numerals. Without that second condition, `set_weather("ringing")`
+        arriving before `set_bells` populates the wall would unhide an empty
+        (or stale) wall for one frame -- the 489c99a blank-frame class. Rain
+        stands in until the wall is real, so no ordering of the two setters
+        can ever produce a blank panel.
+        """
+        show_wall = self._weather == "ringing" and bool(self._wall_layout)
+        _set_hidden(self._rain_group, show_wall)
+        _set_hidden(self._wall_group, not show_wall)
+        _set_hidden(self._nolink, self._weather != "nolink")
+
     def set_weather(self, state):
-        """Base state: "calm" | "ringing" | "nolink". Idempotent."""
+        """Base state: "calm" | "ringing" | "nolink". Idempotent.
+
+        Ordering contract: callers should call `set_bells` before
+        `set_weather("ringing")`. This method does not depend on that --
+        an empty wall keeps rain showing until `set_bells` fills it -- but
+        the intended order avoids a frame of rain before the wall appears.
+        """
         if state == self._weather:
             return
         self._weather = state
-        ringing = state == "ringing"
-        # Three visibility flips at once: suspend the panel so it cannot
-        # scan out the moment where neither rain nor wall is showing.
         self._display.auto_refresh = False
         try:
-            _set_hidden(self._rain_group, ringing)
-            _set_hidden(self._wall_group, not ringing)
-            _set_hidden(self._nolink, state != "nolink")
+            self._sync_layers()
         finally:
             self._display.auto_refresh = True
 
     def set_bells(self, order):
         """Rebuild the bell wall from a bell_order list. Idempotent."""
+        # Cheapest guard first. Cockpit calls this once per loop iteration
+        # at several hundred hertz and the answer is almost always "no
+        # change", so comparing the raw list keeps wall_layout's list-plus-
+        # six-tuples allocation off the steady-state path entirely -- that
+        # is real GC pressure on an RP2040, not a micro-optimisation.
+        if order == self._order:
+            return
+        self._order = list(order)      # copy: the caller may reuse its list
         layout = km_weather.wall_layout(order)
         if layout == self._wall_layout:
+            # Different order, same wall: wall_layout truncates past six.
             return
         self._wall_layout = layout
         # Rare change event: rebuild the layer's children with the panel's
@@ -226,6 +264,9 @@ class Screen:
                 tg = displayio.TileGrid(bank[ws % 10],
                                         pixel_shader=self._pal, x=x, y=y)
                 self._wall_group.append(tg)
+            # Going empty->populated (or back) changes whether the wall may
+            # show, so the derivation has to re-run inside the same suspend.
+            self._sync_layers()
         finally:
             self._display.auto_refresh = True
 
@@ -245,7 +286,7 @@ class Screen:
                 y=(km_weather.SCREEN_H - km_weather.BIG_H) // 2)
             self._marquee_group.append(tg)
             self._marquee_tile = tg
-            self._marquee_group.hidden = False
+            _set_hidden(self._marquee_group, False)
         finally:
             self._display.auto_refresh = True
         self._marquee_epoch = ticks_ms()
@@ -292,7 +333,20 @@ class Screen:
             # skips ahead rather than stretching the wipe. x runs from
             # SCREEN_W down to -(BIG_W - 1); displayio clips a TileGrid that
             # hangs off either edge, so no write lands outside 128x64.
-            x = km_weather.marquee_x(ticks_diff(now, self._marquee_epoch))
+            #
+            # The clamp is load-bearing. marquee() seeds the epoch from its
+            # own ticks_ms() read, while `now` was read by the caller earlier
+            # in the same loop iteration -- so if the frame gate fires on the
+            # very iteration that started the wipe, elapsed is NEGATIVE.
+            # marquee_x returns None for that, which would look identical to
+            # "finished" and silently cancel the wipe before it drew a frame.
+            # Clamping keeps this file independent of the caller's clock-read
+            # ordering; the cost is that a wipe can begin one frame late,
+            # which is 50ms and invisible.
+            elapsed = ticks_diff(now, self._marquee_epoch)
+            if elapsed < 0:
+                elapsed = 0
+            x = km_weather.marquee_x(elapsed)
             if x is None:
                 self._marquee_epoch = None
                 _set_hidden(self._marquee_group, True)
