@@ -56,7 +56,7 @@ def test_ws_message_carries_colorhash_colors_and_names_by_id():
     ]
     (msg,) = [m for m in s.refresh(workspaces, {"id": 1}, None, [])
               if m["t"] == "ws"]
-    assert msg["colors"] == {"1": "e16000"}
+    assert msg["colors"] == {"1": "be5000"}
     assert msg["names"] == {"1": "mirepoix"}
 
 
@@ -131,8 +131,8 @@ def test_fnv1a32_normalizes_to_nfc():
 
 def test_ws_color_hashes_plain_name():
     from keymakerd.hyprland import ws_color
-    assert ws_color("mirepoix") == "e16000"          # cell 6, led surface
-    assert ws_color("oracle") == "ffbc63"            # cell 1, led surface
+    assert ws_color("mirepoix") == "be5000"          # cell 6, led surface
+    assert ws_color("oracle") == "dd9100"            # cell 1, led surface
     assert ws_color("4") is None                     # unnamed: bare id, no color
     assert ws_color("") is None
     assert ws_color(None) is None
@@ -140,11 +140,12 @@ def test_ws_color_hashes_plain_name():
 
 def test_ws_color_takes_the_led_surface_not_the_fill():
     # palette.json's five columns are not interchangeable. `bg` is Petroff's published
-    # fill (#e76300 for cell 6); `led` is the WS2812 rendering (#e16000). Sending the
-    # fill would push a color that was never checked against the pad's hardware.
+    # fill (#e76300 for cell 6); `led` is the WS2812 rendering (#be5000 since the
+    # 2026-08-23 led-band re-saturation). Sending the fill would push a color that
+    # was never checked against the pad's hardware.
     from keymakerd.hyprland import ws_color
     assert ws_color("mirepoix") != "e76300"
-    assert ws_color("mirepoix") == "e16000"
+    assert ws_color("mirepoix") == "be5000"
 
 
 def test_ws_color_is_none_without_a_palette(tmp_path, monkeypatch):
@@ -171,7 +172,7 @@ def test_session_name_sanitizes_like_ws_attach():
 def test_ws_color_hashes_sanitized_name():
     from keymakerd.hyprland import ws_color
     # "wacky sax" sanitizes to "wacky-sax"; fnv1a32("wacky-sax")=0xaecd57d7, mod 10 = 1.
-    assert ws_color("wacky sax") == "ffbc63"
+    assert ws_color("wacky sax") == "dd9100"
     assert ws_color("wacky sax") == ws_color("wacky-sax")
 
 
@@ -298,6 +299,43 @@ def test_ctx_windows_carries_jump_targets():
     assert got["tmux:@2"]["s"] == "mirepoix" and got["tmux:@2"]["i"] == 1
     assert got["tmux:@2"]["addr"] == "0xaa"     # the session's ws-* client
     assert got["hypr:0xcc"]["addr"] == "0xcc"
+
+
+def test_ctx_windows_falls_back_to_the_workspace_label_session():
+    # A foot client's app-id freezes at launch, so `ws-colorhash` can sit on a
+    # workspace whose terminal is now attached to session `oracle`. When the
+    # class-derived session matches no tmux windows, fall back to the session
+    # named after the WORKSPACE LABEL -- the rename-resilient fallback cockpit
+    # v2 shipped with (fcdb0a6), reproduced live 2026-08-23.
+    clients = [{"address": "0xaa", "class": "ws-colorhash",
+                "workspace": {"id": 3, "name": "oracle"}}]
+    twins = [
+        {"id": "tmux:@29", "s": "oracle", "i": 1, "n": "power", "active": False,
+         "bell": False},
+        {"id": "tmux:@32", "s": "oracle", "i": 2, "n": "macropad", "active": True,
+         "bell": False},
+    ]
+    got = hyprland.ctx_windows(twins, clients, 3, PAL10,
+                               fallback=("oracle", "0xaa"))
+    assert [w["id"] for w in got] == ["tmux:@29", "tmux:@32"]
+    assert got[0]["addr"] == "0xaa"             # jump target is the real client
+    assert got[0]["s"] == "oracle"              # select-window targets the live session
+
+
+def test_ctx_windows_class_derived_session_wins_over_the_fallback():
+    # Parity with v2's candidate ordering: the class-derived session is tried
+    # first, the label fallback only fills a miss.
+    clients = [{"address": "0xaa", "class": "ws-colorhash",
+                "workspace": {"id": 3, "name": "oracle"}}]
+    twins = [
+        {"id": "tmux:@1", "s": "colorhash", "i": 1, "n": "lab", "active": True,
+         "bell": False},
+        {"id": "tmux:@2", "s": "oracle", "i": 1, "n": "power", "active": False,
+         "bell": False},
+    ]
+    got = hyprland.ctx_windows(twins, clients, 3, PAL10,
+                               fallback=("oracle", "0xaa"))
+    assert [w["id"] for w in got] == ["tmux:@1"]
 
 
 def test_ctx_windows_survives_null_and_boolean_workspaces():

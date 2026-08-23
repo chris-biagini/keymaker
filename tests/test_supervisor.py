@@ -333,6 +333,39 @@ def test_poll_ctx_survives_a_tmux_outage_without_blanking_bare_terminals(monkeyp
                                 "active": False, "bell": False}]
 
 
+def test_poll_ctx_passes_the_workspace_label_fallback(monkeypatch, tmp_path):
+    # Live repro 2026-08-23: client app-id ws-colorhash (frozen at launch) on
+    # workspace "oracle" whose terminal is attached to session "oracle". The
+    # poll must hand ctx_windows the label-derived session + the ws-* client's
+    # address so the bottom deck lights anyway.
+    from keymakerd import hyprland as hyprmod
+    from keymakerd import tmux as tmuxmod
+
+    async def fake_list():
+        return [{"id": "tmux:@32", "s": "oracle", "i": 2, "n": "macropad",
+                 "active": True, "bell": False}]
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00", "c01"])
+        sup = _supervisor(tmp_path)
+        sent = []
+        sup.link = _sent_link(sent)
+        sup.state.clients = [{"class": "ws-colorhash", "address": "0xaa",
+                              "workspace": {"id": 3, "name": "oracle"}}]
+        sup.state.active = 3
+        sup.state.names = {"3": "oracle"}
+        sup.state.fg = {3: {"addr": "0xaa", "cls": "ws-colorhash"}}
+        await sup._poll_ctx()
+        return sent, list(sup.ctx_items)
+
+    sent, items = asyncio.run(scenario())
+    (ctx,) = [m for m in sent if m["t"] == "ctx"]
+    assert ctx["items"] == [{"n": "2 macropad", "c": "c01",
+                             "active": True, "bell": False}]
+    assert items[0]["addr"] == "0xaa"
+
+
 def test_poll_ctx_trims_names_for_the_wire(monkeypatch, tmp_path):
     # LineCodec discards over-long lines WHOLE, so an unbounded window name
     # could silently blank the pad. Names are trimmed daemon-side.

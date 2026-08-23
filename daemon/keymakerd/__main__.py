@@ -207,9 +207,20 @@ class Supervisor:
                 twins = []
             bells = hyprland.deck_bells(twins, self.state._urgent_addrs,
                                         self.state.clients)
+            # Rename-resilient fallback: a client's app-id freezes at launch,
+            # so the workspace LABEL's session name is the second guess when
+            # the class-derived session matches nothing (see ctx_windows).
+            fallback = None
+            label = self.state.names.get(str(self.state.active))
+            client = self.state.fg.get(self.state.active)
+            if label and client:
+                session = hyprland.session_name(label)
+                if session:
+                    fallback = (session, client["addr"])
             items = hyprland.ctx_windows(twins, self.state.clients,
                                          self.state.active, hyprland.led_palette(),
-                                         focused_addr=self.state.addr, bells=bells)
+                                         focused_addr=self.state.addr, bells=bells,
+                                         fallback=fallback)
             self.ctx_items = items
             msg = {"t": "ctx", "items": [
                 {"n": it["n"][:CTX_NAME_MAX], "c": it["c"],

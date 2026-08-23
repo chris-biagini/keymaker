@@ -293,11 +293,20 @@ def _is_terminal(cls):
 CTX_KEYS = 6      # the bottom half of the pad
 
 
-def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=frozenset()):
+def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=frozenset(),
+                fallback=None):
     """The bottom deck: windows on workspace id `active` that earn a key.
 
     tmux windows of the workspace's ws-* sessions come first, by (session,
     index); sessionless terminals follow, by address. At most CTX_KEYS items.
+
+    `fallback` is an optional (session, client_addr) pair tried when the
+    class-derived sessions match no tmux windows at all. A foot client's
+    app-id freezes at launch, so `ws-colorhash` can sit on a workspace whose
+    terminal is long since re-attached to another session; the workspace
+    label's session name is the rename-resilient second guess cockpit v2
+    shipped with (fcdb0a6), and the class-derived candidate still wins when
+    it matches -- same ordering as v2.
 
     Color is identity: a tmux window keeps the palette cell of its INDEX
     (window 1 is always cell 0's hue wherever it lands, matching the
@@ -320,14 +329,20 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
             sessions[cls[3:]] = str(c.get("address", ""))
 
     entries = []
-    for w in sorted(tmux_windows, key=lambda w: (w["s"], w["i"])):
-        addr = sessions.get(w["s"])
-        if addr is None:
-            continue
-        entries.append({"id": w["id"], "n": "%d %s" % (w["i"], w["n"]),
-                        "s": w["s"], "i": w["i"],
-                        "addr": addr, "active": bool(w["active"]),
-                        "c": pal[(w["i"] - 1) % len(pal)] if pal else None})
+
+    def add_tmux(session_map):
+        for w in sorted(tmux_windows, key=lambda w: (w["s"], w["i"])):
+            addr = session_map.get(w["s"])
+            if addr is None:
+                continue
+            entries.append({"id": w["id"], "n": "%d %s" % (w["i"], w["n"]),
+                            "s": w["s"], "i": w["i"],
+                            "addr": addr, "active": bool(w["active"]),
+                            "c": pal[(w["i"] - 1) % len(pal)] if pal else None})
+
+    add_tmux(sessions)
+    if not entries and fallback is not None:
+        add_tmux({fallback[0]: fallback[1]})
     for c in sorted(clients, key=lambda c: str(c.get("address", ""))):
         addr = str(c.get("address", ""))
         if (addr in used_addrs or not _is_terminal(c.get("class"))
