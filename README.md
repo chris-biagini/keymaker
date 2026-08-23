@@ -17,9 +17,10 @@ A single app: **Cockpit**, the split deck.
   full-bright, occupied dimmed, urgent pulsing, empty dark. Tap to switch
   workspace; hold to move the focused window there silently.
 - **Bottom six keys = windows on the active workspace**: the tmux windows of
-  its `ws-*` session first (each keeping the palette cell of its tmux index),
-  then sessionless terminals. Focused full-bright, others dimmed, bell
-  pulsing. Tap to jump to that window.
+  its `ws-*` session first (each in the colorhash color of its window NAME, the
+  same cell the tmux status bar paints), then sessionless terminals (which have
+  no stable name, so they take the cell of the key they land on). Focused
+  full-bright, others dimmed, bell pulsing. Tap to jump to that window.
 - The OLED is a weather display: sparse digital rain while all is calm, and
   when terminal bells ring elsewhere, a wall of workspace numerals sized by
   recency — the newest bell largest. A workspace switch flashes that

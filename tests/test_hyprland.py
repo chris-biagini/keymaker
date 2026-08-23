@@ -266,17 +266,31 @@ def test_ctx_windows_is_the_active_workspace_only_tmux_first_by_index():
     # bonsai's tmux window and terminal live on ws 1: not this deck's business
 
 
-def test_ctx_windows_colors_tmux_by_index_terminals_by_key_position():
-    # A tmux window keeps the palette cell of its INDEX (window 1 is always
-    # cell 0's hue, wherever it lands), matching the index-keyed coloring the
-    # old split deck had; a sessionless terminal has no index, so it takes the
-    # cell of the key it lands on.
+def test_ctx_windows_colors_tmux_by_name_hash_terminals_by_key_position():
+    # A tmux window wears colorhash(WINDOW NAME) -- the same cell the status
+    # bar paints, because wsid-tmux-colors stamps @wsid_wfg/@wsid_wbg from the
+    # window's name. Golden cells: "rails" -> 0, "logs" -> 2. A sessionless
+    # terminal has no tmux name for the bar to agree with (its title churns on
+    # every cd), so it keeps the cell of the key it lands on.
     got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)
-    assert [w["c"] for w in got] == ["c00", "c01", "c02"]
+    assert [w["c"] for w in got] == ["c00", "c02", "c02"]
     got2 = hyprland.ctx_windows(
         [{"id": "tmux:@4", "s": "mirepoix", "i": 5, "n": "x",
           "active": False, "bell": False}], CTX_CLIENTS, 2, PAL10)
-    assert got2[0]["c"] == "c04"                # index 5 -> cell 4, not position 0
+    assert got2[0]["c"] == "c05"                # hash("x") -> cell 5; index 5 unconsulted
+
+
+def test_ctx_windows_gives_two_windows_of_one_name_one_color():
+    # The signature of the index-keyed scheme this replaced: under
+    # pal[(i - 1) % len(pal)] two ADJACENT keys can never share a cell, so a
+    # same-named pair lit as two hues on the pad while the bar drew one. That
+    # asymmetry is how the drift was spotted. Collisions are expected at n=10.
+    twins = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "logs",
+              "active": False, "bell": False},
+             {"id": "tmux:@2", "s": "mirepoix", "i": 2, "n": "logs",
+              "active": False, "bell": False}]
+    got = hyprland.ctx_windows(twins, CTX_CLIENTS, 2, PAL10)
+    assert [w["c"] for w in got[:2]] == ["c02", "c02"]
 
 
 def test_ctx_windows_without_a_palette_sends_no_color():

@@ -361,7 +361,10 @@ def test_poll_ctx_passes_the_workspace_label_fallback(monkeypatch, tmp_path):
 
     sent, items = asyncio.run(scenario())
     (ctx,) = [m for m in sent if m["t"] == "ctx"]
-    assert ctx["items"] == [{"n": "2 macropad", "c": "c01",
+    # c00 is colorhash("macropad") against this 2-cell fake palette -- the color
+    # is incidental here (the fallback path is what's under test), but pinning it
+    # keeps a silent revert to index-keying from passing.
+    assert ctx["items"] == [{"n": "2 macropad", "c": "c00",
                              "active": True, "bell": False}]
     assert items[0]["addr"] == "0xaa"
 

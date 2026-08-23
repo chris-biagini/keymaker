@@ -90,6 +90,27 @@ def ws_color(name):
     return pal[fnv1a32(session_name(name)) % len(pal)]
 
 
+def name_color(name, pal):
+    """colorhash(tmux WINDOW name) -> a cell of `pal`, or None when there is none.
+
+    Sibling of ws_color, deliberately NOT the same function. ws_color sanitizes
+    first because a workspace's color must agree with the SESSION name derived
+    from its label; a tmux window name is already the exact string the bar
+    hashes -- wsid-tmux-colors' stamp_window feeds `#{window_name}` straight to
+    wsid_cell -- so sanitizing here would split the two apart. It also does not
+    treat an all-digit name as unnamed: a workspace named "3" is Hyprland's way
+    of saying "no label", but a tmux window named "3" is a window called 3, and
+    the bar colors it.
+
+    Takes `pal` as an argument rather than calling led_palette() so ctx_windows
+    can stay a pure function of its inputs (its tests pass a fake palette).
+    Empty palette or empty name -> None: fail closed on color, never invent one.
+    """
+    if not pal or not name:
+        return None
+    return pal[fnv1a32(name) % len(pal)]
+
+
 def ws_label(name):
     """Human label from a workspace name, or None for unnamed (bare-digit) names."""
     if not name:
@@ -308,11 +329,20 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
     shipped with (fcdb0a6), and the class-derived candidate still wins when
     it matches -- same ordering as v2.
 
-    Color is identity: a tmux window keeps the palette cell of its INDEX
-    (window 1 is always cell 0's hue wherever it lands, matching the
-    index-keyed coloring of the tmux status bar side); a sessionless terminal
-    has no index, so it takes the cell of the key it lands on. An empty
-    palette sends None -- fail closed on color, never invent one.
+    Color is identity, and identity is the NAME: a tmux window wears
+    colorhash(window name), so it keeps its hue across a move, a swap and a
+    renumber, and matches the pill the status bar draws for it. Until
+    2026-08-23 this was pal[(index - 1) % len(pal)] instead -- true when cockpit
+    v2 shipped, and stale from the moment wsid-tmux-colors retired its
+    @wsid_win1..6 per-index bins for a name hash (see that script's header).
+    The tell was two same-named windows: the bar drew one color, the pad drew
+    two, which a per-index scheme can never avoid.
+
+    A sessionless terminal is NOT name-hashed. Its only name is a Hyprland
+    title that changes on every cd, so hashing it would make the key flicker,
+    and there is no bar entry for it to agree with anyway -- it takes the cell
+    of the key it lands on. An empty palette sends None for both -- fail closed
+    on color, never invent one.
 
     Each item carries its jump target: `s`/`i` for tmux plus the session
     client's `addr` (focus the terminal first, then select-window), or just
@@ -338,7 +368,7 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
             entries.append({"id": w["id"], "n": "%d %s" % (w["i"], w["n"]),
                             "s": w["s"], "i": w["i"],
                             "addr": addr, "active": bool(w["active"]),
-                            "c": pal[(w["i"] - 1) % len(pal)] if pal else None})
+                            "c": name_color(w["n"], pal)})
 
     add_tmux(sessions)
     if not entries and fallback is not None:
