@@ -10,25 +10,22 @@ Named for the Matrix's Keymaker: a pad of keys that opens doors.
 
 ## What it does
 
-A single app: **Cockpit**, the switchboard.
+A single app: **Cockpit**, the split deck.
 
-The 3×4 key grid is a set of twelve sticky slots, one per open terminal
-window across every Hyprland workspace, paged with the knob when there are
-more than twelve. A window keeps its slot for life — sticky allocation means
-nothing another window does can move it — so keys don't reshuffle underfoot.
-Hold the encoder for 3.5 s to re-key the board from scratch.
-
-- Each key is color-identified to its workspace (same palette as the tmux
-  status bar). Tap a key to jump to that window.
-- The OLED shows a four-row, twelve-cell legend naming every slot on the
-  current page (`sss:nn` — session + window), with a per-cell state gutter
-  (live, ghost, focused, bell) drawn as shape rather than color, since a
-  1-bit panel has no hue or brightness to spare. The header shows the host,
-  page, and window count; the row below it names whichever window is
-  currently focused, scrolling if it doesn't fit.
+- **Top six keys = Hyprland workspaces 1–6**, each lit in its workspace's
+  colorhash color (same Petroff-10 palette as the tmux status bar): active
+  full-bright, occupied dimmed, urgent pulsing, empty dark. Tap to switch
+  workspace; hold to move the focused window there silently.
+- **Bottom six keys = windows on the active workspace**: the tmux windows of
+  its `ws-*` session first (each keeping the palette cell of its tmux index),
+  then sessionless terminals. Focused full-bright, others dimmed, bell
+  pulsing. Tap to jump to that window.
+- The OLED shows an identity header (workspace number and name, plus
+  REC/submap badges) and the focused window's title, scrolling if it
+  doesn't fit. Its fuller design is deliberately still open.
 - Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
   works the same over mosh as it does locally.
-- The knob only pages — there is no other mode, and no on-device app menu.
+- The knob is currently unassigned.
 
 ### Theme following
 
@@ -46,15 +43,17 @@ Two programs, one protocol, each side optional to the other:
   daemon and the pad shows a quiet idle card instead of pretending.
 - **Daemon** (`keymakerd`, Python ≥3.11, stdlib + pyserial) owns everything
   host-shaped: Hyprland state in and actuation out (via Hyprland's IPC
-  sockets — no synthetic keystrokes), tmux window state, deck slot
-  persistence, and the Omarchy palette.
+  sockets — no synthetic keystrokes), tmux window state, and the Omarchy
+  palette.
 - **Link**: JSON-lines over the `usb_cdc` data channel (the second CDC
   serial interface; the REPL stays free on the first). The protocol carries
   state, not commands, and the daemon re-sends a full snapshot on every
   connect — so restarts, firmware reloads, and replugs all self-heal.
 
-Design details and the wire protocol table live in
-[docs/specs/2026-08-22-switchboard-operator-design.md](docs/specs/2026-08-22-switchboard-operator-design.md).
+The split deck's original design lives in
+[docs/specs/2026-08-15-cockpit-v2-design.md](docs/specs/2026-08-15-cockpit-v2-design.md)
+(the 2026-08-22 switchboard-operator spec describes a sticky-slot design that
+was tried and reverted the same day).
 
 ## Requirements
 

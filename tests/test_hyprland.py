@@ -27,24 +27,53 @@ def test_find_instance_dir_picks_dir_with_socket(tmp_path):
     assert find_instance_dir(tmp_path) == b
 
 
-def test_refresh_sends_nothing_and_updates_daemon_internal_state():
-    """refresh() is a mutator. It used to return a {"t": "ws"} message that no
-    firmware branch ever read; the pad renders the deck and nothing else."""
+def test_refresh_returns_ws_and_win_messages_on_first_snapshot():
+    # The split deck's top half consumes {"t": "ws"} again -- the write-only-wire
+    # era (no firmware reader) ended when cockpit went back to rendering
+    # workspaces on keys 0-5.
     s = HyprState()
-    assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) is None
-    assert s.active == 1
-    assert s.addr == ""            # WIN carries no address
-    assert s.clients == CLIENTS    # retained for the deck poll
+    msgs = {m["t"]: m for m in s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)}
+    assert msgs["ws"]["active"] == 1
+    assert msgs["ws"]["occupied"] == [1, 5]      # windows > 0 only
+    assert msgs["ws"]["urgent"] == []
+    assert msgs["win"]["title"] == "vim ~/notes.md"
+    assert s.clients == CLIENTS                  # still retained for the ctx poll
 
 
-def test_hyprstate_exposes_no_workspace_wire_surface():
-    """Regression guard for the write-only wire this replaced. If a future change
-    wants to tell the pad about workspaces, it needs a firmware consumer FIRST --
-    the old one shipped a message on every refresh for months with no reader."""
+def test_refresh_returns_only_what_changed():
     s = HyprState()
-    for gone in ("snapshot", "_ws_msg", "occupied", "urgent_ws", "colors",
-                 "names", "light"):
-        assert not hasattr(s, gone), f"{gone} is back without a consumer"
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS) == []
+    msgs = s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)
+    assert [m["t"] for m in msgs] == ["ws"]
+
+
+def test_ws_message_carries_colorhash_colors_and_names_by_id():
+    s = HyprState()
+    workspaces = [
+        {"id": 1, "name": "mirepoix", "windows": 1},
+        {"id": 2, "name": "2", "windows": 1},          # unnamed: no color, no name
+    ]
+    (msg,) = [m for m in s.refresh(workspaces, {"id": 1}, None, [])
+              if m["t"] == "ws"]
+    assert msg["colors"] == {"1": "e16000"}
+    assert msg["names"] == {"1": "mirepoix"}
+
+
+def test_urgent_workspaces_reach_the_ws_message_and_clear_on_focus():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    s.handle_event("urgent", "5f2280")               # client on ws 5
+    (msg,) = s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert msg["urgent"] == [5]
+    msgs = s.refresh(WORKSPACES, {"id": 5}, WIN, CLIENTS)   # looking at it clears it
+    assert all(m["urgent"] == [] for m in msgs if m["t"] == "ws")
+
+
+def test_snapshot_replays_ws_and_win_for_a_reconnecting_pad():
+    s = HyprState()
+    s.refresh(WORKSPACES, ACTIVE_WS, WIN, CLIENTS)
+    assert [m["t"] for m in s.snapshot()] == ["ws", "win"]
 
 
 def test_urgent_event_address_is_normalized_and_cleared_on_focus():
@@ -146,16 +175,6 @@ def test_ws_color_hashes_sanitized_name():
     assert ws_color("wacky sax") == ws_color("wacky-sax")
 
 
-def test_deck_colors_keys_by_name_and_neutralises_unnamed_workspaces():
-    """Workspace color reaches the pad only through the deck message, keyed by
-    workspace NAME. refresh() used to also broadcast a per-id color table; it had
-    no reader. An unnamed (bare-digit) workspace has no identity to hash, so it
-    renders neutral rather than being dropped -- a missing key would leave the
-    slot with no color at all."""
-    assert hyprland.deck_colors([{"ws": "mirepoix"}, {"ws": "oracle"}, {"ws": "4"}]) == {
-        "mirepoix": "e16000", "oracle": "ffbc63", "4": hyprland.NEUTRAL_COLOR}
-
-
 FG_CLIENTS = [
     {"address": "0xaaa", "class": "firefox", "workspace": {"id": 2}, "focusHistoryID": 0},
     {"address": "0xbbb", "class": "ws-mirepoix", "workspace": {"id": 2}, "focusHistoryID": 3},
@@ -207,74 +226,6 @@ DECK_CLIENTS = [
     {"address": "0xcc", "class": "foot",        "workspace": {"id": 1, "name": "bonsai"}},
     {"address": "0xdd", "class": "foot",        "workspace": {"id": 4, "name": "4"}},
 ]
-DECK_TWINS = [
-    {"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails", "active": True, "bell": False},
-    {"id": "tmux:@5", "s": "phoneonly", "i": 1, "n": "away", "active": False, "bell": False},
-]
-
-
-def test_only_signalling_locally_reachable_windows_earn_a_key():
-    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)
-    ids = [g["id"] for g in got]
-    assert "tmux:@2" in ids            # tmux window in a ws-* session
-    assert "hypr:0xcc" in ids          # bare foot, signals via Hyprland bell
-    assert "hypr:0xdd" in ids          # bare foot on an unnamed workspace
-    assert "hypr:0xbb" not in ids      # firefox cannot signal
-    assert "tmux:@5" not in ids        # no local client to jump to
-    assert "hypr:0xaa" not in ids      # the ws-* client itself is not a key
-
-
-def test_tmux_windows_take_the_workspace_of_their_ws_client():
-    got = {g["id"]: g for g in hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)}
-    assert got["tmux:@2"]["ws"] == "mirepoix"
-    assert got["tmux:@2"]["n"] == "1 rails"       # index carried into the label
-
-
-def test_deck_windows_orders_by_workspace_id_not_name():
-    # Chris's actual layout (2026-08-20): id 1 bonsai, id 2 mirepoix, id 3
-    # colorhash. Alphabetically that's bonsai, colorhash, mirepoix -- which
-    # would put colorhash on key 2 instead of key 3, contradicting Hyprland's
-    # on-screen left-to-right workspace order. deck_windows must sort by
-    # workspace id, not name.
-    clients = [
-        {"address": "0x1", "class": "ws-bonsai", "workspace": {"id": 1, "name": "bonsai"}},
-        {"address": "0x2", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
-        {"address": "0x3", "class": "ws-colorhash", "workspace": {"id": 3, "name": "colorhash"}},
-    ]
-    twins = [
-        {"id": "tmux:@c", "s": "colorhash", "i": 1, "n": "app", "active": False, "bell": False},
-        {"id": "tmux:@m", "s": "mirepoix", "i": 1, "n": "rails", "active": False, "bell": False},
-        {"id": "tmux:@b", "s": "bonsai", "i": 1, "n": "notes", "active": False, "bell": False},
-    ]
-    got = hyprland.deck_windows(twins, clients)
-    assert [g["id"] for g in got] == ["tmux:@b", "tmux:@m", "tmux:@c"]
-
-
-def test_deck_windows_sessionless_terminal_follows_its_workspaces_tmux_windows():
-    clients = [
-        {"address": "0x1", "class": "ws-mirepoix", "workspace": {"id": 1, "name": "mirepoix"}},
-        {"address": "0x2", "class": "foot", "workspace": {"id": 1, "name": "mirepoix"}},
-        {"address": "0x3", "class": "foot", "workspace": {"id": 2, "name": "bonsai"}},
-    ]
-    twins = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
-              "active": False, "bell": False}]
-    got = hyprland.deck_windows(twins, clients)
-    assert [g["id"] for g in got] == ["tmux:@1", "hypr:0x2", "hypr:0x3"]
-
-
-def test_unnamed_workspaces_render_white_not_nothing():
-    got = hyprland.deck_windows(DECK_TWINS, DECK_CLIENTS)
-    colors = hyprland.deck_colors(got)
-    assert colors["mirepoix"] == "e16000"
-    assert colors["4"] == "ffffff"                # bare-digit name: no identity
-
-
-def test_ws_color_itself_is_unchanged_and_still_returns_none():
-    # The neutral belongs to the deck path only; the workspace pill still wants
-    # None for an unnamed workspace so it can render nothing at all.
-    assert hyprland.ws_color("4") is None
-
-
 def test_tmux_flag_wins_where_a_session_exists():
     twins = [{"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails",
               "active": False, "bell": True}]
@@ -294,42 +245,79 @@ def test_no_bells_is_an_empty_set_not_none():
     assert hyprland.deck_bells([], set(), DECK_CLIENTS) == set()
 
 
-def test_deck_windows_survives_a_client_with_no_workspace_id():
-    # Hyprland always supplies an integer id for a normal client, but deck_windows
-    # SORTS on it, so a missing one would raise TypeError against real ints.
-    # _poll_deck catches Exception, so the symptom would be a deck that silently
-    # stops updating -- degrade to "sorts last" instead of crashing.
-    clients = [
-        {"address": "0xc", "class": "foot", "workspace": {"name": "x"}, "title": "no-id"},
-        {"address": "0xd", "class": "foot", "workspace": {"id": 1, "name": "y"},
-         "title": "has-id"},
-    ]
-    got = hyprland.deck_windows([], clients)
-    assert [w["n"] for w in got] == ["has-id", "no-id"]
+PAL10 = ["c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"]
+CTX_CLIENTS = [
+    {"address": "0xaa", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xbb", "class": "firefox", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xcc", "class": "foot", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xdd", "class": "foot", "workspace": {"id": 1, "name": "bonsai"}},
+]
+CTX_TWINS = [
+    {"id": "tmux:@3", "s": "mirepoix", "i": 2, "n": "logs", "active": False, "bell": False},
+    {"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails", "active": True, "bell": False},
+    {"id": "tmux:@9", "s": "bonsai", "i": 1, "n": "notes", "active": True, "bell": False},
+]
 
 
-def test_deck_windows_rejects_a_bool_workspace_id():
-    # bool is an int subclass, so isinstance(True, int) passes a naive guard and
-    # True would sort as workspace 1 rather than last.
+def test_ctx_windows_is_the_active_workspace_only_tmux_first_by_index():
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)
+    assert [w["id"] for w in got] == ["tmux:@2", "tmux:@3", "hypr:0xcc"]
+    # bonsai's tmux window and terminal live on ws 1: not this deck's business
+
+
+def test_ctx_windows_colors_tmux_by_index_terminals_by_key_position():
+    # A tmux window keeps the palette cell of its INDEX (window 1 is always
+    # cell 0's hue, wherever it lands), matching the index-keyed coloring the
+    # old split deck had; a sessionless terminal has no index, so it takes the
+    # cell of the key it lands on.
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)
+    assert [w["c"] for w in got] == ["c00", "c01", "c02"]
+    got2 = hyprland.ctx_windows(
+        [{"id": "tmux:@4", "s": "mirepoix", "i": 5, "n": "x",
+          "active": False, "bell": False}], CTX_CLIENTS, 2, PAL10)
+    assert got2[0]["c"] == "c04"                # index 5 -> cell 4, not position 0
+
+
+def test_ctx_windows_without_a_palette_sends_no_color():
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, [])
+    assert all(w["c"] is None for w in got)     # fail closed on color
+
+
+def test_ctx_windows_active_and_bell_flags():
+    bells = {"tmux:@3", "hypr:0xcc"}
+    got = {w["id"]: w for w in hyprland.ctx_windows(
+        CTX_TWINS, CTX_CLIENTS, 2, PAL10, focused_addr="0xcc", bells=bells)}
+    assert got["tmux:@2"]["active"] is True     # tmux's own active flag
+    assert got["tmux:@3"]["bell"] is True
+    assert got["hypr:0xcc"]["active"] is True   # holds Hyprland focus
+    assert got["hypr:0xcc"]["bell"] is True
+
+
+def test_ctx_windows_carries_jump_targets():
+    got = {w["id"]: w for w in hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)}
+    assert got["tmux:@2"]["s"] == "mirepoix" and got["tmux:@2"]["i"] == 1
+    assert got["tmux:@2"]["addr"] == "0xaa"     # the session's ws-* client
+    assert got["hypr:0xcc"]["addr"] == "0xcc"
+
+
+def test_ctx_windows_survives_null_and_boolean_workspaces():
+    # Hyprland can send "workspace": null, and bool is an int subclass. Either
+    # would raise inside _poll_ctx -- which catches Exception broadly, so the
+    # symptom is a bottom deck that silently stops updating, not a crash.
     clients = [
-        {"address": "0xc", "class": "foot", "workspace": {"id": True, "name": "b"},
+        {"address": "0xaa", "class": "foot", "workspace": None, "title": "null-ws"},
+        {"address": "0xbb", "class": "foot", "workspace": {"id": True, "name": "b"},
          "title": "boolish"},
-        {"address": "0xd", "class": "foot", "workspace": {"id": 2, "name": "y"},
+        {"address": "0xcc", "class": "foot", "workspace": {"id": 2, "name": "y"},
          "title": "real"},
     ]
-    got = hyprland.deck_windows([], clients)
-    assert [w["n"] for w in got] == ["real", "boolish"]
+    got = hyprland.ctx_windows([], clients, 2, PAL10)
+    assert [w["n"] for w in got] == ["real"]
 
 
-def test_deck_windows_survives_a_null_workspace():
-    # Hyprland can send "workspace": null. _ws_sort_id guards for exactly this,
-    # but the sibling `.get("name", "")` call used to run on the unguarded
-    # object -- an AttributeError there freezes the deck via _poll_deck's broad
-    # except. It should still earn a slot, sorted last.
-    clients = [
-        {"address": "0xc", "class": "foot", "workspace": None, "title": "null-ws"},
-        {"address": "0xd", "class": "foot", "workspace": {"id": 2, "name": "y"},
-         "title": "real"},
-    ]
-    got = hyprland.deck_windows([], clients)
-    assert [w["n"] for w in got] == ["real", "null-ws"]
+def test_ctx_windows_caps_at_six_keys():
+    twins = [{"id": "tmux:@%d" % i, "s": "mirepoix", "i": i, "n": "w%d" % i,
+              "active": False, "bell": False} for i in range(1, 9)]
+    got = hyprland.ctx_windows(twins, CTX_CLIENTS, 2, PAL10)
+    assert len(got) == 6
+    assert got[-1]["id"] == "tmux:@6"           # overflow drops from the end

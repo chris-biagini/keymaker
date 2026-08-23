@@ -90,6 +90,16 @@ def ws_color(name):
     return pal[fnv1a32(session_name(name)) % len(pal)]
 
 
+def ws_label(name):
+    """Human label from a workspace name, or None for unnamed (bare-digit) names."""
+    if not name:
+        return None
+    text = name.strip()
+    if not text or text.isdigit():
+        return None
+    return text
+
+
 REFRESH_EVENTS = {
     "workspace", "workspacev2", "focusedmon", "openwindow", "closewindow",
     "movewindow", "activewindow", "activewindowv2", "urgent", "fullscreen",
@@ -129,18 +139,22 @@ def parse_event(line):
 
 class HyprState:
     def __init__(self):
-        # The workspace the user is on. Daemon-internal: it resolves the focused
-        # window (supervisor._focused_window_id) and prunes stale bells below.
-        # Nothing about workspaces is sent to the pad -- the deck is the only
-        # thing the pad renders, and a deck slot carries its own workspace name.
+        # Workspace state feeding the {"t": "ws"} message -- the split deck's
+        # top half renders it on keys 0-5, so this wire has a consumer again.
         self.active = 1
+        self.occupied = []
+        self.urgent_ws = []
+        self.colors = {}
+        self.names = {}
+        self.cls = ""
+        self.title = ""
         self.addr = ""
         self.fg = {}          # ws id -> {"addr", "cls"} best ws-* client
         self.submap = ""
         self.screencast = False
         self._urgent_addrs = set()
-        # Raw IPC snapshots, retained for the deck poll (hyprland.deck_windows /
-        # deck_bells need both). Initialised empty so a deck poll firing before
+        # Raw IPC snapshots, retained for the ctx poll (hyprland.ctx_windows /
+        # deck_bells need both). Initialised empty so a poll firing before
         # the first refresh cannot raise.
         self.clients = []
         self.workspaces = []
@@ -165,16 +179,14 @@ class HyprState:
         return name in REFRESH_EVENTS, False
 
     def refresh(self, workspaces, active_ws, active_win, clients):
-        """Re-read Hyprland's world into daemon-internal state. Sends nothing.
-
-        Returns None on purpose: this used to emit a {"t": "ws"} message and the
-        pad never had a branch that read one, so the whole workspace-state wire
-        was write-only. What survives here is what something downstream actually
-        consumes -- see each assignment.
-        """
+        """Re-read Hyprland's world. Returns the wire messages that changed:
+        {"t": "ws"} for the top half of the split deck, {"t": "win"} for the
+        OLED's focused-window line."""
+        msgs = []
         self.clients = clients
         self.workspaces = workspaces
         active = active_ws.get("id", 1)
+        occupied = sorted(w["id"] for w in workspaces if w.get("windows", 0) > 0)
         addr_ws = {
             str(c.get("address", "")).removeprefix("0x"): c.get("workspace", {}).get("id")
             for c in clients
@@ -185,10 +197,13 @@ class HyprState:
         }
         # Note what that prune consumes: `active`. A bell is forgotten once you
         # are looking at the workspace that rang, so the set is not merely
-        # accumulated -- deck_bells reads it every poll.
+        # accumulated -- both the ws message's urgent list and deck_bells read it.
+        urgent = sorted({addr_ws[a] for a in self._urgent_addrs})
         # Per-workspace ws-* client, for the workspace-aware bottom deck.
         # focusHistoryID 0 is the focused window, ascending = less recent, so the
         # lowest id per workspace is "the terminal you were most recently in there".
+        # Daemon-internal (drives ctx polling and tap focus), never sent to the
+        # pad, so it is deliberately NOT part of the changed-state comparison.
         fg = {}
         for c in clients:
             if not str(c.get("class", "")).startswith("ws-"):
@@ -201,12 +216,39 @@ class HyprState:
                 fg[ws_id] = (hist, {"addr": str(c.get("address", "")),
                                     "cls": str(c.get("class", ""))})
         self.fg = {ws: entry for ws, (_, entry) in fg.items()}
-        # Assigned unconditionally. These used to sit behind a "did anything
-        # change?" guard, which existed only to decide whether to emit a
-        # message; with no message to emit, the guard bought nothing and cost a
-        # way to be subtly wrong.
-        self.active = active
+        colors = {}
+        names = {}
+        for w in workspaces:
+            c = ws_color(w.get("name"))
+            if c is not None:
+                colors[str(w["id"])] = c
+            lbl = ws_label(w.get("name"))
+            if lbl is not None:
+                names[str(w["id"])] = lbl
+        if (active, occupied, urgent, colors, names) != (
+                self.active, self.occupied, self.urgent_ws, self.colors, self.names):
+            self.active, self.occupied, self.urgent_ws, self.colors, self.names = (
+                active, occupied, urgent, colors, names)
+            msgs.append(self._ws_msg())
+        cls = (active_win or {}).get("class", "")
+        title = (active_win or {}).get("title", "")[:60]
         self.addr = str((active_win or {}).get("address", ""))
+        if (cls, title) != (self.cls, self.title):
+            self.cls, self.title = cls, title
+            msgs.append(self._win_msg())
+        return msgs
+
+    def snapshot(self):
+        """Both wire messages, for replaying to a pad that just (re)connected."""
+        return [self._ws_msg(), self._win_msg()]
+
+    def _ws_msg(self):
+        return {"t": "ws", "active": self.active, "occupied": self.occupied,
+                "urgent": self.urgent_ws, "colors": self.colors,
+                "names": self.names}
+
+    def _win_msg(self):
+        return {"t": "win", "cls": self.cls, "title": self.title}
 
 
 # A key is for something that can ASK FOR YOU and that you can GO TO locally.
@@ -215,23 +257,17 @@ class HyprState:
 # A browser does neither, and three of them would eat a quarter of the deck.
 TERMINAL_CLASSES = ("foot", "footclient", "alacritty", "kitty", "ghostty")
 
-# Unnamed (bare-digit) workspaces have no identity to hash, so they render white:
-# achromatic reads as "no identity assigned", which is exactly true. This is a HUE
-# substitute, not a brightness state -- see spec section 5.2.
-NEUTRAL_COLOR = "ffffff"
-
-
 WS_ID_LAST = 1 << 30      # sorts after any real Hyprland workspace id
 
 
 def _ws_sort_id(wsobj):
-    """Workspace id for ordering, or a sentinel that sorts last.
+    """Workspace id for filtering/ordering, or a sentinel that matches nothing.
 
-    Hyprland always supplies an integer id for a normal client, but the deck sorts
-    on this field and a missing or non-integer one would raise TypeError comparing
-    against real ints -- which _poll_deck catches, so the symptom would be a deck
-    that silently stops updating rather than anything visible. Degrade to "put it
-    at the end" instead. bool is excluded because it is an int subclass.
+    Hyprland always supplies an integer id for a normal client, but a missing or
+    non-integer one would raise TypeError against real ints -- which _poll_ctx
+    catches, so the symptom would be a bottom deck that silently stops updating
+    rather than anything visible. Degrade to the sentinel instead. bool is
+    excluded because it is an int subclass (True would match workspace 1).
     """
     v = wsobj.get("id") if isinstance(wsobj, dict) else None
     return v if isinstance(v, int) and not isinstance(v, bool) else WS_ID_LAST
@@ -240,10 +276,10 @@ def _ws_sort_id(wsobj):
 def _ws_obj(c):
     """A client's workspace as a dict, whatever Hyprland actually sent.
 
-    Sibling of _ws_sort_id and for the same reason: deck_windows reads `name`
-    off this object, and a client with "workspace": null would raise
-    AttributeError inside _poll_deck -- which catches Exception broadly, so the
-    symptom is a deck that silently stops updating, not a visible failure.
+    Sibling of _ws_sort_id and for the same reason: a client with
+    "workspace": null would raise AttributeError inside _poll_ctx -- which
+    catches Exception broadly, so the symptom is a bottom deck that silently
+    stops updating, not a visible failure.
     """
     ws = c.get("workspace") if isinstance(c, dict) else None
     return ws if isinstance(ws, dict) else {}
@@ -254,56 +290,57 @@ def _is_terminal(cls):
     return c in TERMINAL_CLASSES or c.startswith("ws-")
 
 
-def deck_windows(tmux_windows, clients):
-    """Windows that earn a key, as [{id, ws, n}] for km_deck.Deck.update.
+CTX_KEYS = 6      # the bottom half of the pad
 
-    Ordered by workspace id so the deck reads left-to-right the way Hyprland's
-    workspaces do on screen. km_deck.Deck.update no longer sorts (it trusts
-    caller order verbatim), so this function owns the ordering decision --
-    it's the only side that knows Hyprland's workspace order. Sorting by
-    workspace NAME (the old behaviour) contradicted on-screen order whenever
-    names don't happen to sort the way the workspaces are numbered, e.g.
-    id 1 "bonsai", id 2 "mirepoix", id 3 "colorhash" would put colorhash
-    (alphabetically second) ahead of mirepoix on the keys.
 
-    Within a workspace, tmux windows sort by (session name, window index) and
-    come before that workspace's sessionless terminals, which sort by address.
+def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=frozenset()):
+    """The bottom deck: windows on workspace id `active` that earn a key.
+
+    tmux windows of the workspace's ws-* sessions come first, by (session,
+    index); sessionless terminals follow, by address. At most CTX_KEYS items.
+
+    Color is identity: a tmux window keeps the palette cell of its INDEX
+    (window 1 is always cell 0's hue wherever it lands, matching the
+    index-keyed coloring of the tmux status bar side); a sessionless terminal
+    has no index, so it takes the cell of the key it lands on. An empty
+    palette sends None -- fail closed on color, never invent one.
+
+    Each item carries its jump target: `s`/`i` for tmux plus the session
+    client's `addr` (focus the terminal first, then select-window), or just
+    `addr` for a bare terminal.
     """
-    ws_of_session = {}   # session name -> (workspace id, workspace name)
+    sessions = {}     # session name -> client address, active workspace only
     used_addrs = set()
     for c in clients:
         cls = str(c.get("class", ""))
-        if cls.startswith("ws-"):
-            wsobj = _ws_obj(c)
-            ws_of_session[cls[3:]] = (_ws_sort_id(wsobj), str(wsobj.get("name", "")))
-            used_addrs.add(str(c.get("address", "")))
+        if not cls.startswith("ws-"):
+            continue
+        used_addrs.add(str(c.get("address", "")))
+        if _ws_sort_id(_ws_obj(c)) == active:
+            sessions[cls[3:]] = str(c.get("address", ""))
 
     entries = []
-    for win in tmux_windows:
-        entry = ws_of_session.get(win["s"])
-        if entry is None:           # session with no local client: nothing to jump to
+    for w in sorted(tmux_windows, key=lambda w: (w["s"], w["i"])):
+        addr = sessions.get(w["s"])
+        if addr is None:
             continue
-        ws_id, ws_name = entry
-        entries.append(((ws_id, 0, win["s"], win["i"]), {
-            "id": win["id"], "ws": ws_name, "n": "%d %s" % (win["i"], win["n"])}))
-
-    for c in clients:
+        entries.append({"id": w["id"], "n": "%d %s" % (w["i"], w["n"]),
+                        "s": w["s"], "i": w["i"],
+                        "addr": addr, "active": bool(w["active"]),
+                        "c": pal[(w["i"] - 1) % len(pal)] if pal else None})
+    for c in sorted(clients, key=lambda c: str(c.get("address", ""))):
         addr = str(c.get("address", ""))
-        if addr in used_addrs or not _is_terminal(c.get("class")):
+        if (addr in used_addrs or not _is_terminal(c.get("class"))
+                or _ws_sort_id(_ws_obj(c)) != active):
             continue
-        wsobj = _ws_obj(c)
-        entries.append(((_ws_sort_id(wsobj), 1, addr), {
-            "id": "hypr:" + addr,
-            "ws": str(wsobj.get("name", "")),
-            "n": str(c.get("title", "") or c.get("class", ""))}))
-
-    entries.sort(key=lambda e: e[0])
-    return [e[1] for e in entries]
-
-
-def deck_colors(windows):
-    """{workspace name: led hex} for a deck window list, white where unnamed."""
-    return {win["ws"]: (ws_color(win["ws"]) or NEUTRAL_COLOR) for win in windows}
+        entries.append({"id": "hypr:" + addr,
+                        "n": str(c.get("title", "") or c.get("class", "")),
+                        "addr": addr, "active": addr == focused_addr,
+                        "c": pal[len(entries) % len(pal)] if pal else None})
+    entries = entries[:CTX_KEYS]
+    for e in entries:
+        e["bell"] = e["id"] in bells
+    return entries
 
 
 def deck_bells(tmux_windows, urgent_addrs, clients):
