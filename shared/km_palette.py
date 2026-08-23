@@ -26,17 +26,36 @@ DEFAULT = {
 # the cost of contrast against the active key.
 OCCUPIED_SCALE = 0.55
 
-# An alert must never sit DIMMER than ambient. The urgent pulse used to run
-# 0.25 -> 1.0, which was above the old occupied level for its whole cycle; with
-# occupied at 0.55 a fixed 0.25 floor would make the bell key recede below its
-# neighbours for part of every pulse. Tie the floor to OCCUPIED_SCALE so the
-# two cannot drift apart again.
-URGENT_FLOOR = OCCUPIED_SCALE
+# A bell key blinks like a car's hazard lamp: half the cycle lit, half dark,
+# hard edges, no fade. Chosen on hardware 2026-08-23 (firmware/apps/pulselab.py,
+# since deleted) from four candidate waveforms, then from a 2x2 of floor and
+# period. Chris's words: "if you have any sense of what a hazard flasher on a
+# car looks like, that's the model."
+#
+# This RETIRES the old rule that an alert must never sit dimmer than an
+# occupied key, which is why the floor is 0.0 and not OCCUPIED_SCALE. That rule
+# was right for the waveform it was written for -- a smooth 0.55 -> 1.0 ramp,
+# where dipping under ambient makes the key briefly ambiguous with its
+# neighbours and the alert just looks like a dim workspace. A hard blink
+# signals through CHANGE, not through absolute brightness: nothing else on the
+# deck switches, so the dark half reads as alarm rather than as recession. The
+# old rule survives in the tests, inverted, so this reversal stays visible.
+#
+# The known cost, considered and accepted on hardware: during the dark half a
+# ringing key is the same black as an EMPTY key. A faint ember floor (0.12) was
+# built and eyeballed side by side specifically to avoid that collision, and
+# rejected -- the blink alone disambiguates, and the ember cost the hazard-lamp
+# look that is the entire point.
+URGENT_DARK = 0.0        # the off phase is genuinely off
+URGENT_DUTY = 0.5        # 50/50, as an automotive flasher runs
 
 
 def urgent_factor(phase):
-    """Pulse factor for a bell/urgent key: never below an occupied key."""
-    return URGENT_FLOOR + (1.0 - URGENT_FLOOR) * phase
+    """Blink factor for a bell/urgent key. `phase` is a LINEAR 0..1 ramp over
+    the blink period -- not the triangle wave this used to take, since a
+    square wave needs to know where it is in the cycle, not how far from the
+    ends. Lit for the first half, dark for the second."""
+    return 1.0 if phase < URGENT_DUTY else URGENT_DARK
 
 
 def hex_to_int(s):

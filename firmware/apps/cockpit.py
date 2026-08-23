@@ -11,6 +11,7 @@ from km_keys import KeyTracker
 from pad.framework import App
 
 KEYS = 12
+BLINK_MS = 1000       # bell blink period; ~60 flashes/min, chosen on hardware
 
 
 class Cockpit(App):
@@ -86,8 +87,12 @@ class Cockpit(App):
         return "empty"
 
     def _draw_leds(self, now):
-        phase = (now % 1000) / 1000
-        phase = phase * 2 if phase < 0.5 else (1 - phase) * 2   # triangle wave
+        # Linear ramp, NOT a triangle: the bell blink is a square wave and
+        # needs to know where it is in the cycle, not how far from the ends.
+        # (The `% BLINK_MS` glitches once per ticks_ms wrap, every ~6 days --
+        # one cycle lands short. Pre-existing, invisible, not worth a
+        # wraparound-safe epoch here.)
+        phase = (now % BLINK_MS) / BLINK_MS
         frame = [0x000000] * KEYS
         if self.link.up:
             colors = self.ws.get("colors", {})
