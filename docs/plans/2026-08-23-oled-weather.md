@@ -1195,8 +1195,11 @@ the bench.
 8. Start a screen share while the bell wall is up: the `REC` badge is still
    legible, layered over the wall of numerals.
 9. Trigger a submap: its badge appears, legible over both rain and the bell
-   wall, and when a screen share is also active at the same time, the
-   submap badge is the one that drops rather than REC.
+   wall, and it sits to the LEFT of REC's top-right corner — that corner is
+   reserved, not contested, so both badges show together and neither
+   reflows. The badge is dropped only when the submap's name is longer than
+   11 characters; force that case with a submap named `resize-window`
+   (13 chars) and confirm nothing is drawn rather than something clipped.
 10. Leave it in calm for five minutes: no drift, no creeping artifacts,
     rain keeps its rhythm.
 11. Look closely at individual rain glyphs: each should read as a whole,
@@ -1204,7 +1207,12 @@ the bench.
 12. Check for a dead strip (roughly 4px) along the bottom of the panel,
     behind where the `no link` tag sits — its presence would mean
     `terminalio.FONT` is actually 6×12 on this CircuitPython build rather
-    than the assumed 6×8, and the rain grid should be 21×5.
+    than the assumed 6×8, and the rain grid should be 21×5. If it is 5 rows,
+    `RainField`'s drop length needs shortening too: the trail is currently
+    `3 + randrange(3)` (3–5 rows), so on a 5-row grid every drop lights the
+    whole column and the head/dim/off gradient stops reading as a trail at
+    all. Roughly 2–3 rows is the right length there. No host test would
+    catch this — every `RainField` test uses `rows=8`.
 13. Judge whether the checkerboard dither behind each raindrop reads as
     "dim"/grey at arm's length, or just reads as noise. This is the 1-bit
     stand-in for a 50% grey trail — if it doesn't read, the rain has no
@@ -1222,5 +1230,11 @@ the bench.
     clear, and judge whether it's worth addressing.
 17. Judge whether the display feels smooth or the loop feels strained at
     the current frame clock (`FRAME_MS = 50`, rain advancing every 4th
-    frame). If it strains, reverting to `FRAME_MS = 100` / `RAIN_DIV = 4`
-    halves the marquee's smoothness but is a two-constant change.
+    frame). If it strains, the revert is **both** constants together:
+    `FRAME_MS = 100` **and** `RAIN_DIV = 2` (the pre-change pair — note the
+    Task 6 body above shows those original values, not the shipped ones).
+    They move in step deliberately: the rain steps every 200ms either way,
+    and only the marquee changes — 12 wipe steps of 13px at 50ms, versus 6
+    steps of 26px at 100ms. Changing `FRAME_MS` alone would quietly halve
+    the rain to a 400ms step, degrading the one thing the change was careful
+    to hold fixed.
