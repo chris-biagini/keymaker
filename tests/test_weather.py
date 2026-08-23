@@ -1,4 +1,8 @@
-from km_weather import weather, update_stamps, bell_order
+import random
+
+from km_weather import (SCREEN_W, SCREEN_H, BIG_W, BIG_H, SMALL_W, SMALL_H,
+                        weather, update_stamps, bell_order, wall_layout,
+                        MARQUEE_MS, marquee_x, RainField, FrameClock)
 
 
 def plain_diff(a, b):
@@ -56,10 +60,6 @@ def test_bell_order_survives_tick_wraparound():
     assert bell_order(stamps, wrap_diff) == [2, 1]
 
 
-from km_weather import (SCREEN_W, SCREEN_H, BIG_W, BIG_H, SMALL_W, SMALL_H,
-                        wall_layout)
-
-
 def test_wall_layout_single_bell_is_one_big_numeral():
     assert wall_layout([3]) == [(3, "big", 4, 8)]
 
@@ -90,9 +90,6 @@ def test_wall_layout_empty():
     assert wall_layout([]) == []
 
 
-from km_weather import MARQUEE_MS, marquee_x
-
-
 def test_marquee_enters_from_right_edge():
     assert marquee_x(0) == SCREEN_W
 
@@ -111,3 +108,83 @@ def test_marquee_over_and_not_started_return_none():
     assert marquee_x(MARQUEE_MS) is None
     assert marquee_x(MARQUEE_MS + 5000) is None
     assert marquee_x(-1) is None
+
+
+def collect(field, steps):
+    return [field.step() for _ in range(steps)]
+
+
+def test_rain_is_deterministic_for_a_fixed_seed():
+    a = collect(RainField(random.Random(7), cols=21, rows=8), 50)
+    b = collect(RainField(random.Random(7), cols=21, rows=8), 50)
+    assert a == b
+
+
+def test_rain_stays_in_bounds_and_kinds_are_valid():
+    field = RainField(random.Random(3), cols=21, rows=8, glyphs=16)
+    for frame in collect(field, 300):
+        for col, row, kind, glyph_i in frame:
+            assert 0 <= col < 21
+            assert 0 <= row < 8
+            assert kind in ("head", "dim", "off")
+            assert 0 <= glyph_i < 16
+
+
+def test_rain_cells_change_state_never_teleport():
+    # A cell may only become "head" from off, "dim" from head, "off" from
+    # dim -- the frame deltas are the whole contract, so a violation here
+    # is a visible artifact on hardware.
+    field = RainField(random.Random(11), cols=21, rows=8)
+    state = {}
+    for frame in collect(field, 300):
+        for col, row, kind, _ in frame:
+            prev = state.get((col, row), "off")
+            allowed = {"off": ("head",), "head": ("dim",), "dim": ("off",)}
+            assert kind in allowed[prev], (prev, kind)
+            state[(col, row)] = kind
+
+
+def test_rain_eventually_rains_and_eventually_clears_cells():
+    field = RainField(random.Random(5), cols=21, rows=8)
+    kinds = [k for frame in collect(field, 300) for (_, _, k, _) in frame]
+    assert "head" in kinds
+    assert "dim" in kinds
+    assert "off" in kinds
+
+
+def test_rain_respects_max_drops():
+    field = RainField(random.Random(1), cols=21, rows=8, max_drops=3)
+    for _ in range(300):
+        field.step()
+        assert len(field.drops) <= 3
+
+
+def test_frameclock_not_due_returns_zero():
+    clock = FrameClock(100, now=1000, add=lambda a, b: a + b,
+                       diff=lambda a, b: a - b)
+    assert clock.advance(1050) == 0
+    assert clock.advance(1099) == 0
+
+
+def test_frameclock_counts_skipped_frames_and_does_not_drift():
+    add, diff = (lambda a, b: a + b), (lambda a, b: a - b)
+    clock = FrameClock(100, now=1000, add=add, diff=diff)
+    assert clock.advance(1100) == 1
+    assert clock.advance(1550) == 4       # a stall: frames counted, not lost
+    # deadlines stay on the epoch grid: next due at exactly 1600
+    assert clock.advance(1599) == 0
+    assert clock.advance(1600) == 1
+
+
+def test_frameclock_wraparound_safe():
+    period = 2 ** 29
+
+    def wdiff(a, b):
+        return ((a - b + period // 2) % period) - period // 2
+
+    def wadd(a, b):
+        return (a + b) % period
+
+    clock = FrameClock(100, now=period - 50, add=wadd, diff=wdiff)
+    assert clock.advance(period - 10) == 0
+    assert clock.advance(60) == 1         # wrapped past the deadline at 50

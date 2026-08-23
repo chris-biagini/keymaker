@@ -81,3 +81,75 @@ def marquee_x(elapsed_ms):
         return None
     span = SCREEN_W + BIG_W
     return SCREEN_W - (span * elapsed_ms) // MARQUEE_MS
+
+
+_SPAWN_P = 0.35              # per-step chance of trying to start a new drop
+
+
+class RainField:
+    """Sparse matrix-rain over a cols x rows glyph grid, as pure data.
+
+    step() returns only the cells that changed this frame -- the drawing
+    edge applies them 1:1 as tile writes, so the delta list IS the
+    hardware-touch budget (docs/pad-timing.md section 5). At most one drop
+    per column; a drop is a head glyph descending with a trail of "dim"
+    glyphs behind it, erased from the tail.
+    """
+
+    def __init__(self, rng, cols, rows, glyphs=16, max_drops=10):
+        self.rng = rng
+        self.cols = cols
+        self.rows = rows
+        self.glyphs = glyphs
+        self.max_drops = max_drops
+        self.drops = {}          # col -> {"head": row, "len": n, "glyph": i}
+
+    def step(self):
+        changes = []
+        for col in list(self.drops):
+            d = self.drops[col]
+            if 0 <= d["head"] < self.rows:
+                changes.append((col, d["head"], "dim", d["glyph"]))
+            d["head"] += 1
+            tail = d["head"] - d["len"]          # first row still lit
+            if 0 <= tail - 1 < self.rows:
+                changes.append((col, tail - 1, "off", 0))
+            if d["head"] < self.rows:
+                d["glyph"] = self.rng.randrange(self.glyphs)
+                changes.append((col, d["head"], "head", d["glyph"]))
+            if tail >= self.rows:
+                del self.drops[col]
+        if len(self.drops) < self.max_drops and self.rng.random() < _SPAWN_P:
+            col = self.rng.randrange(self.cols)
+            if col not in self.drops:
+                glyph = self.rng.randrange(self.glyphs)
+                self.drops[col] = {"head": 0,
+                                   "len": 3 + self.rng.randrange(3),
+                                   "glyph": glyph}
+                changes.append((col, 0, "head", glyph))
+        return changes
+
+
+class FrameClock:
+    """Fixed-rate animation scheduler, epoch-anchored and wraparound-safe.
+
+    Deadlines sit on the grid epoch + n*period: each deadline is advanced by
+    an exact add(prev, period), which is the same grid with no accumulated
+    drift (docs/pad-timing.md section 3 forbids chaining from *event
+    occurrence* times, not constant-period deadline advancement). advance()
+    returns how many whole periods elapsed, so a caller can account for
+    frames a slow tick skipped instead of silently losing them.
+    """
+
+    def __init__(self, period, now, add, diff):
+        self.period = period
+        self.add = add
+        self.diff = diff
+        self.next_at = add(now, period)
+
+    def advance(self, now):
+        n = 0
+        while self.diff(now, self.next_at) >= 0:
+            self.next_at = self.add(self.next_at, self.period)
+            n += 1
+        return n
