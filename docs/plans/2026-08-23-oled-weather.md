@@ -374,7 +374,7 @@ git commit -m "feat: marquee wipe position function"
 
 ---
 
-### Task 4: km_weather — RainField
+### Task 4: km_weather — RainField and FrameClock
 
 **Files:**
 - Modify: `shared/km_weather.py` (append)
@@ -387,6 +387,13 @@ git commit -m "feat: marquee wipe position function"
   `rng` is anything with `.random()` and `.randrange(n)` — the firmware
   passes CircuitPython's `random` **module** (it has no `Random` class);
   tests pass `random.Random(seed)`. Task 6 maps kinds to tile-sheet banks.
+- Produces: `class FrameClock` with `__init__(self, period, now, add, diff)`
+  (`add`/`diff` are `ticks_add`/`ticks_diff`-shaped callables) and
+  `advance(now) -> int` — how many whole periods have elapsed since the last
+  call (0 = not due). Deadlines sit at `epoch + n*period`: advancing the next
+  deadline by exact `add(prev, period)` increments never drifts, and the
+  returned count lets callers account for frames a slow tick skipped. Task 6
+  drives all animation from one FrameClock.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -444,6 +451,40 @@ def test_rain_respects_max_drops():
     for _ in range(300):
         field.step()
         assert len(field.drops) <= 3
+
+
+def test_frameclock_not_due_returns_zero():
+    from km_weather import FrameClock
+    clock = FrameClock(100, now=1000, add=lambda a, b: a + b,
+                       diff=lambda a, b: a - b)
+    assert clock.advance(1050) == 0
+    assert clock.advance(1099) == 0
+
+
+def test_frameclock_counts_skipped_frames_and_does_not_drift():
+    from km_weather import FrameClock
+    add, diff = (lambda a, b: a + b), (lambda a, b: a - b)
+    clock = FrameClock(100, now=1000, add=add, diff=diff)
+    assert clock.advance(1100) == 1
+    assert clock.advance(1550) == 4       # a stall: frames counted, not lost
+    # deadlines stay on the epoch grid: next due at exactly 1600
+    assert clock.advance(1599) == 0
+    assert clock.advance(1600) == 1
+
+
+def test_frameclock_wraparound_safe():
+    from km_weather import FrameClock
+    period = 2 ** 29
+
+    def wdiff(a, b):
+        return ((a - b + period // 2) % period) - period // 2
+
+    def wadd(a, b):
+        return (a + b) % period
+
+    clock = FrameClock(100, now=period - 50, add=wadd, diff=wdiff)
+    assert clock.advance(period - 10) == 0
+    assert clock.advance(60) == 1         # wrapped past the deadline at 50
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -501,19 +542,44 @@ class RainField:
                                    "glyph": glyph}
                 changes.append((col, 0, "head", glyph))
         return changes
+
+
+class FrameClock:
+    """Fixed-rate animation scheduler, epoch-anchored and wraparound-safe.
+
+    Deadlines sit on the grid epoch + n*period: each deadline is advanced by
+    an exact add(prev, period), which is the same grid with no accumulated
+    drift (docs/pad-timing.md section 3 forbids chaining from *event
+    occurrence* times, not constant-period deadline advancement). advance()
+    returns how many whole periods elapsed, so a caller can account for
+    frames a slow tick skipped instead of silently losing them.
+    """
+
+    def __init__(self, period, now, add, diff):
+        self.period = period
+        self.add = add
+        self.diff = diff
+        self.next_at = add(now, period)
+
+    def advance(self, now):
+        n = 0
+        while self.diff(now, self.next_at) >= 0:
+            self.next_at = self.add(self.next_at, self.period)
+            n += 1
+        return n
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /home/chris/src/keymaker && python -m pytest tests/test_weather.py -v`
-Expected: 20 passed
+Expected: 23 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd /home/chris/src/keymaker
 git add shared/km_weather.py tests/test_weather.py
-git commit -m "feat: RainField delta-based rain simulation"
+git commit -m "feat: RainField delta rain simulation + FrameClock scheduler"
 ```
 
 ---
@@ -844,12 +910,15 @@ class Screen:
                       self._marquee_group, self._badges):
             self.group.append(layer)
         display.root_group = self.group
+        self._display = display
 
         # state caches -- write hardware only on change
         self._weather = None
         self._flags = (None, None)
-        self._frame_at = ticks_add(ticks_ms(), FRAME_MS)
-        self._frame_no = 0
+        self._submap_text = ""
+        self._clock = km_weather.FrameClock(FRAME_MS, ticks_ms(),
+                                            ticks_add, ticks_diff)
+        self._rain_acc = 0
 
     # ---- state ---------------------------------------------------------
     def set_weather(self, state):
@@ -865,15 +934,20 @@ class Screen:
         if layout == self._wall_layout:
             return
         self._wall_layout = layout
-        # Rare change event: rebuild the layer's children. displayio redraws
-        # only the affected regions; this never runs at tick frequency.
-        while len(self._wall_group):
-            self._wall_group.pop()
-        for ws, size, x, y in layout:
-            bank = self._big if size == "big" else self._small
-            tg = displayio.TileGrid(bank[ws % 10], pixel_shader=self._pal,
-                                    x=x, y=y)
-            self._wall_group.append(tg)
+        # Rare change event: rebuild the layer's children with the panel's
+        # auto-refresh suspended, so an async scan-out can never catch the
+        # half-built (or empty) wall -- the 489c99a blank-frame bug class.
+        self._display.auto_refresh = False
+        try:
+            while len(self._wall_group):
+                self._wall_group.pop()
+            for ws, size, x, y in layout:
+                bank = self._big if size == "big" else self._small
+                tg = displayio.TileGrid(bank[ws % 10],
+                                        pixel_shader=self._pal, x=x, y=y)
+                self._wall_group.append(tg)
+        finally:
+            self._display.auto_refresh = True
 
     def marquee(self, ws):
         while len(self._marquee_group):
@@ -890,14 +964,28 @@ class Screen:
         if (rec, submap) == self._flags:
             return
         self._flags = (rec, submap)
-        self._rec.hidden = not rec
-        if submap:
-            self._submap.text = " " + submap + " "
-        self._submap.hidden = not submap or rec and len(submap) > 12
-        # (submap yields to REC on collision, km_text's old priority rule)
+        if self._rec.hidden != (not rec):
+            self._rec.hidden = not rec
+        # Submap yields on collision (km_text's old priority rule), computed
+        # in pixels: " [name] " at 6px/char, right-anchored at x=94, must
+        # stay on screen left of REC's reserved corner -> len(name) <= 11.
+        # Label.text has no equality short-circuit (docs/pad-timing.md), so
+        # the text write goes through its own cache, not the flags tuple.
+        text = " [" + submap + "] " if submap and len(submap) <= 11 else ""
+        if text != self._submap_text:
+            self._submap_text = text
+            if text:
+                self._submap.text = text
+            self._submap.hidden = not text
 
     # ---- animation ------------------------------------------------------
     def tick(self, now):
+        # ALL display mutation is gated behind the frame clock -- the main
+        # loop is unthrottled (docs/pad-timing.md section 1), so anything
+        # outside this gate would dirty the panel at loop frequency.
+        frames = self._clock.advance(now)
+        if not frames:
+            return
         if self._marquee_epoch is not None:
             x = km_weather.marquee_x(ticks_diff(now, self._marquee_epoch))
             if x is None:
@@ -905,18 +993,16 @@ class Screen:
                 self._marquee_epoch = None
             elif self._marquee_tile.x != x:
                 self._marquee_tile.x = x
-        if ticks_diff(now, self._frame_at) < 0:
-            return
-        while ticks_diff(now, self._frame_at) >= 0:      # catch up, no drift
-            self._frame_at = ticks_add(self._frame_at, FRAME_MS)
-        self._frame_no += 1
-        if not self._rain_group.hidden and self._frame_no % RAIN_DIV == 0:
-            for col, row, kind, glyph_i in self._field.step():
-                if kind == "off":
-                    self._rain_grid[col, row] = 0
-                else:
-                    bank = _KIND_BANK[kind] * self._rain_n
-                    self._rain_grid[col, row] = 1 + bank + glyph_i
+        self._rain_acc += frames
+        if self._rain_acc >= RAIN_DIV:
+            self._rain_acc = 0
+            if not self._rain_group.hidden:
+                for col, row, kind, glyph_i in self._field.step():
+                    if kind == "off":
+                        self._rain_grid[col, row] = 0
+                    else:
+                        bank = _KIND_BANK[kind] * self._rain_n
+                        self._rain_grid[col, row] = 1 + bank + glyph_i
 ```
 
 - [ ] **Step 2: Syntax-check on the host**
@@ -967,16 +1053,20 @@ Changes, precisely:
             self.screen.set_weather("nolink")
             self.screen.set_flags(False, "")
             return
-        urgent = self.ws.get("urgent", [])
+        urgent = self.ws.get("urgent") or []   # None-proof against bad msgs
         km_weather.update_stamps(self._stamps, urgent, now)
-        self.screen.set_weather(km_weather.weather(urgent, True))
+        # set_bells BEFORE set_weather: the wall must be populated before the
+        # weather flip reveals it, or the panel can scan out an empty frame.
         self.screen.set_bells(km_weather.bell_order(self._stamps, ticks_diff))
+        self.screen.set_weather(km_weather.weather(urgent, True))
         self.screen.set_flags(bool(self.flags.get("screencast")),
-                              self.flags.get("submap", ""))
+                              self.flags.get("submap") or "")
         active = self.ws.get("active")
-        if self._last_active is not None and active != self._last_active:
+        if (active is not None and self._last_active is not None
+                and active != self._last_active):
             self.screen.marquee(active)
-        self._last_active = active
+        if active is not None:
+            self._last_active = active
 ```
 
 `on_msg` ends with `self._draw_all(ticks_ms())` as today; `_draw_all`
