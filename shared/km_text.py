@@ -24,9 +24,11 @@ def header_line(host, badges, mode, width):
     returns some width-`width` string rather than a correct one, because at
     that point no composition strategy can convey the header regardless.
 
-    Always returns a string of exactly `width` characters -- callers such as
-    `Screen.set_header`'s slice-then-pad become a no-op rather than a silent
-    corrupter of a well-formed line.
+    Always returns a string of exactly `width` characters, so a caller that
+    slices-and-pads to `width` before drawing is a no-op rather than a silent
+    corrupter of a well-formed line. (No caller does today: the text OLED was
+    retired for the weather display. This module is kept for its marquee
+    helper and because the composition rule above is worth not re-deriving.)
     """
     bl = list(badges)
 

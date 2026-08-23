@@ -1169,3 +1169,75 @@ git add README.md
 git commit -m "docs: README describes the OLED weather display"
 git push
 ```
+
+## Bench checklist (consolidated)
+
+This is the residue of the work that no host test could settle — three code
+reviews and the implementers surfaced questions only the physical pad can
+answer. The branch is not finished until someone has walked this list at
+the bench.
+
+1. Daemon stopped (`systemctl --user stop keymaker`): rain falls, `no link`
+   tag bottom-right, no flicker between frames.
+2. Daemon started: tag clears, rain continues (calm).
+3. `printf '\a'` in a terminal on another workspace: bell wall appears with
+   that workspace's numeral big; rain gone.
+4. Second bell on a different workspace: first numeral shrinks to the small
+   row, newer one is big — confirm the ordering is newest-first, with the
+   most recently belled workspace largest and leftmost.
+5. Visit the ringing windows: bells clear one by one; last clear returns
+   rain.
+6. Switch workspaces repeatedly: the marquee numeral appears every time,
+   not just most times, and the base state underneath is intact once it
+   retires. It should appear centred, with no tearing — the original
+   sliding wipe tore and was replaced on 2026-08-23.
+7. Start a screen share (or `wf-recorder`): the `REC` badge appears
+   top-right, legible over rain; stop and confirm it clears.
+8. Start a screen share while the bell wall is up: the `REC` badge is still
+   legible, layered over the wall of numerals.
+9. Trigger a submap: its badge appears, legible over both rain and the bell
+   wall, and it sits to the LEFT of REC's top-right corner — that corner is
+   reserved, not contested, so both badges show together and neither
+   reflows. The badge is dropped only when the submap's name is longer than
+   11 characters; force that case with a submap named `resize-window`
+   (13 chars) and confirm nothing is drawn rather than something clipped.
+10. Leave it in calm for five minutes: no drift, no creeping artifacts,
+    rain keeps its rhythm.
+11. Look closely at individual rain glyphs: each should read as a whole,
+    correctly-formed character, not a fragment of a neighboring one.
+12. **Settled 2026-08-23: the font is 6×12.** The ~4px dead strip along the
+    bottom of the panel confirmed it, so the rain grid is 21×5, not 21×8.
+    `Screen` now passes `trail_min=2, trail_span=2` whenever the derived
+    grid is under 7 rows, because the default 3–5 trail lights a drop's
+    entire column at that height and flattens the head/dim/off gradient
+    into a solid bar. Re-check on this pass: each drop should still leave
+    dark rows behind it, so the trail reads as a trail rather than a
+    column. No host test can catch a regression here from the grid side —
+    the rows=5 case is pinned in `tests/test_weather.py`, but the value of
+    `rows` itself comes from the font at runtime.
+13. Judge whether the checkerboard dither behind each raindrop reads as
+    "dim"/grey at arm's length, or just reads as noise. This is the 1-bit
+    stand-in for a 50% grey trail — if it doesn't read, the rain has no
+    depth.
+14. Time the pad's boot. If startup is slow enough to notice, the cause is
+    the roughly 8,500 interpreted `Bitmap` writes done at import to build
+    the digit bitmaps, and the fix is pre-baking the upscaled bitmaps
+    instead of computing them at boot.
+15. While the bell wall is visible, force a change in bell order (e.g. bell
+    a third workspace) and watch for a flicker or a blank frame during the
+    rebuild — `auto_refresh = False` should suppress any visible scan-out
+    mid-rebuild.
+16. **Resolved 2026-08-23 by dropping the slide.** The numeral no longer
+    travels, so there is no left edge to watch and no sliver. Judge instead
+    whether ~600ms is the right hold: long enough to register on a fast
+    workspace switch, short enough not to sit on top of a bell wall you
+    wanted to see. `MARQUEE_MS` in `shared/km_weather.py` is the one knob.
+17. **Settled 2026-08-23: back to `FRAME_MS = 100` / `RAIN_DIV = 2`.** The
+    clock briefly ran at 50/4 to buy the sliding marquee 12 steps instead
+    of 6. With the slide gone, rain is the only thing on the clock, and
+    both pairs give it the same 200ms step — so 100/2 is the identical
+    picture for half the gate evaluations. Re-check that the rain's rhythm
+    still feels right and the loop feels unstrained. If either constant
+    ever moves again, move **both**: changing `FRAME_MS` alone silently
+    halves or doubles the rain's speed, which is exactly the trap this item
+    was written to catch.

@@ -1,16 +1,17 @@
 """Cockpit: the split deck. Keys 0-5 = workspaces 1-6 in their colorhash
 colors; keys 6-11 = windows on the active workspace (tmux windows of its ws-*
-session, then sessionless terminals); OLED = identity header + focused window."""
+session, then sessionless terminals); OLED = weather display (rain / bell
+wall / marquee, see docs/specs/2026-08-23-oled-weather-design.md)."""
 from adafruit_ticks import ticks_diff, ticks_ms
 
 import km_palette
+import km_weather
 from km_keys import KeyTracker
-from km_text import header_line, marquee
 
 from pad.framework import App
-from pad.ui import WIDTH_CHARS
 
 KEYS = 12
+BLINK_MS = 1000       # bell blink period; ~60 flashes/min, chosen on hardware
 
 
 class Cockpit(App):
@@ -20,6 +21,9 @@ class Cockpit(App):
         self.ws = {"active": 1, "occupied": [], "urgent": [], "colors": {},
                    "names": {}}
         self.ctx = {"t": "ctx", "items": []}
+        # `win` and `ws["names"]` are accepted and ignored: the daemon still
+        # sends both (the protocol is unchanged) but the weather display has
+        # no consumer for either. Don't go hunting for one.
         self.win = {"cls": "", "title": ""}
         self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
@@ -30,22 +34,18 @@ class Cockpit(App):
         # at zero writes per tick instead of a clear-then-repaint strobe. None
         # forces a full first paint.
         self._led_frame = [None] * KEYS
-        # Last text actually written to each OLED surface, so _draw_text can
-        # skip a redundant write instead of dirtying the panel every tick.
-        self._header_text = None
-        self._focus_text = None
-        # Latches "idle_card has already been painted this outage" so the
-        # no-link branch writes it once per outage rather than every tick --
-        # Label.text has no equality short-circuit (docs/pad-timing.md).
-        self._idle = False
+        # Stamps a workspace on first sight of its bell (km_weather), keyed by
+        # workspace int; drives the bell-wall recency order.
+        self._stamps = {}
+        self._last_active = None
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
-        # A ledtest repaints via on_show; a stale cache would leave that debug
-        # frame (LEDs) or stale text (OLED) stuck instead of being redrawn.
+        # A ledtest repaints the strip behind our back; a stale cache would
+        # leave that debug frame stuck instead of being redrawn. The OLED
+        # needs no equivalent reset -- ledtest never touches the panel, so
+        # the Screen's caches still describe what is on it.
         self._led_frame = [None] * KEYS
-        self._header_text = None
-        self._focus_text = None
         self._draw_all(ticks_ms())
 
     def on_msg(self, msg):
@@ -72,7 +72,8 @@ class Cockpit(App):
         for n in self.tracker.tick(now):
             self.link.send({"t": "key", "n": n, "act": "hold"})
         self._draw_leds(now)          # every pass: urgent pulse animation
-        self._draw_text(now)          # marquee needs time too
+        self._sync_screen(now)        # cheap: every setter diffs internally
+        self.screen.tick(now)         # rain + marquee frame clock
 
     # ---- drawing --------------------------------------------------
     def _ws_state(self, n):
@@ -86,8 +87,12 @@ class Cockpit(App):
         return "empty"
 
     def _draw_leds(self, now):
-        phase = (now % 1000) / 1000
-        phase = phase * 2 if phase < 0.5 else (1 - phase) * 2   # triangle wave
+        # Linear ramp, NOT a triangle: the bell blink is a square wave and
+        # needs to know where it is in the cycle, not how far from the ends.
+        # (The `% BLINK_MS` glitches once per ticks_ms wrap, every ~6 days --
+        # one cycle lands short. Pre-existing, invisible, not worth a
+        # wraparound-safe epoch here.)
+        phase = (now % BLINK_MS) / BLINK_MS
         frame = [0x000000] * KEYS
         if self.link.up:
             colors = self.ws.get("colors", {})
@@ -107,33 +112,30 @@ class Cockpit(App):
                 self.pad.pixels[i] = c
         self._led_frame = frame
 
-    def _draw_text(self, now):
+    def _sync_screen(self, now):
         if not self.link.up:
-            if not self._idle:
-                self.screen.idle_card()
-                # idle_card writes header/focus directly, bypassing the caches;
-                # invalidate them so link recovery forces a full repaint.
-                self._header_text = self._focus_text = None
-                self._idle = True
+            self._stamps.clear()
+            self._last_active = None
+            self.screen.set_weather("nolink")
+            self.screen.set_flags(False, "")
             return
-        self._idle = False
-        badges = []
-        if self.flags["screencast"]:
-            badges.append("REC")
-        if self.flags["submap"]:
-            badges.append("[" + self.flags["submap"] + "]")
-        active = self.ws["active"]
-        name = self.ws.get("names", {}).get(str(active))
-        ident = (str(active) + " " + name) if name else ("ws " + str(active))
-        header = header_line(ident, badges, "", WIDTH_CHARS)
-        if header != self._header_text:
-            self._header_text = header
-            self.screen.set_header(header)
-        focus = marquee(self.win.get("title", ""), WIDTH_CHARS, now)
-        if focus != self._focus_text:
-            self._focus_text = focus
-            self.screen.set_focus(focus)
+        urgent = self.ws.get("urgent") or []   # None-proof against bad msgs
+        km_weather.update_stamps(self._stamps, urgent, now)
+        # set_bells BEFORE set_weather: the wall must be populated before the
+        # weather flip reveals it, or the panel can scan out an empty frame.
+        self.screen.set_bells(km_weather.bell_order(self._stamps, ticks_diff))
+        # link_up=True is a literal, not an oversight: the link-down case
+        # returned above, so by here the link is up by construction.
+        self.screen.set_weather(km_weather.weather(urgent, True))
+        self.screen.set_flags(bool(self.flags.get("screencast")),
+                              self.flags.get("submap") or "")
+        active = self.ws.get("active")
+        if (active is not None and self._last_active is not None
+                and active != self._last_active):
+            self.screen.marquee(active)
+        if active is not None:
+            self._last_active = active
 
     def _draw_all(self, now):
         self._draw_leds(now)
-        self._draw_text(now)
+        self._sync_screen(now)

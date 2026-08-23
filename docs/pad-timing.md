@@ -54,6 +54,27 @@ The one accumulator in Coach (`_next_click += self.quarter`, free-play
 metronome) re-anchors to `ticks_diff(now, self.epoch)` each pass, so a slow tick
 causes catch-up rather than drift.
 
+**One logical instant, one clock read.** Commit `7640022`: `Screen.marquee()`
+seeded its epoch from its own `ticks_ms()` while `Screen.tick(now)` compared
+against the `now` the caller had read earlier in the same loop pass. Both reads
+name the same instant, but the later one is larger, so `ticks_diff(now, epoch)`
+came back *negative* whenever the frame gate fired on the pass that started the
+wipe — and `marquee_x` returns `None` for a negative elapsed, which is
+indistinguishable from "finished". The wipe silently cancelled before drawing a
+frame. Pass one `now` down through everything that participates in a single
+instant; where an API cannot, clamp at the comparison. Two reads of the same
+clock can straddle a comparison, and the interval between them is not
+guaranteed to have a sign.
+
+That bug survived a purpose-built stub-`displayio` harness, which is the wider
+caution: `firmware/pad/ui.py` and `firmware/apps/cockpit.py` cannot be imported
+on the host, so a hand-built harness is their entire safety net — and it only
+ever covers the interleavings whoever wrote it thought to write. Every test in
+that harness advanced the clock before triggering the marquee, so the
+zero-elapsed case was never exercised. Treat a passing harness as evidence about
+the paths it enumerates, not about the file. Logic that can be moved into
+`shared/` and tested for real should be.
+
 ## 4. A fixed-width window abutting a state change is governed by the window
 
 `HORIZON_MS = 200` — the next loop's expected hits were emitted into the scorer
