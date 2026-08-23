@@ -1187,9 +1187,10 @@ the bench.
    most recently belled workspace largest and leftmost.
 5. Visit the ringing windows: bells clear one by one; last clear returns
    rain.
-6. Switch workspaces repeatedly: the marquee numeral wipes across every
-   time, not just most times, and the base state underneath is intact once
-   it resolves.
+6. Switch workspaces repeatedly: the marquee numeral appears every time,
+   not just most times, and the base state underneath is intact once it
+   retires. It should appear centred, with no tearing — the original
+   sliding wipe tore and was replaced on 2026-08-23.
 7. Start a screen share (or `wf-recorder`): the `REC` badge appears
    top-right, legible over rain; stop and confirm it clears.
 8. Start a screen share while the bell wall is up: the `REC` badge is still
@@ -1204,15 +1205,16 @@ the bench.
     rain keeps its rhythm.
 11. Look closely at individual rain glyphs: each should read as a whole,
     correctly-formed character, not a fragment of a neighboring one.
-12. Check for a dead strip (roughly 4px) along the bottom of the panel,
-    behind where the `no link` tag sits — its presence would mean
-    `terminalio.FONT` is actually 6×12 on this CircuitPython build rather
-    than the assumed 6×8, and the rain grid should be 21×5. If it is 5 rows,
-    `RainField`'s drop length needs shortening too: the trail is currently
-    `3 + randrange(3)` (3–5 rows), so on a 5-row grid every drop lights the
-    whole column and the head/dim/off gradient stops reading as a trail at
-    all. Roughly 2–3 rows is the right length there. No host test would
-    catch this — every `RainField` test uses `rows=8`.
+12. **Settled 2026-08-23: the font is 6×12.** The ~4px dead strip along the
+    bottom of the panel confirmed it, so the rain grid is 21×5, not 21×8.
+    `Screen` now passes `trail_min=2, trail_span=2` whenever the derived
+    grid is under 7 rows, because the default 3–5 trail lights a drop's
+    entire column at that height and flattens the head/dim/off gradient
+    into a solid bar. Re-check on this pass: each drop should still leave
+    dark rows behind it, so the trail reads as a trail rather than a
+    column. No host test can catch a regression here from the grid side —
+    the rows=5 case is pinned in `tests/test_weather.py`, but the value of
+    `rows` itself comes from the font at runtime.
 13. Judge whether the checkerboard dither behind each raindrop reads as
     "dim"/grey at arm's length, or just reads as noise. This is the 1-bit
     stand-in for a 50% grey trail — if it doesn't read, the rain has no
@@ -1225,16 +1227,17 @@ the bench.
     a third workspace) and watch for a flicker or a blank frame during the
     rebuild — `auto_refresh = False` should suppress any visible scan-out
     mid-rebuild.
-16. Watch the marquee's left edge as the numeral exits the screen: note
-    whether a small sliver visibly pops off rather than sliding fully
-    clear, and judge whether it's worth addressing.
-17. Judge whether the display feels smooth or the loop feels strained at
-    the current frame clock (`FRAME_MS = 50`, rain advancing every 4th
-    frame). If it strains, the revert is **both** constants together:
-    `FRAME_MS = 100` **and** `RAIN_DIV = 2` (the pre-change pair — note the
-    Task 6 body above shows those original values, not the shipped ones).
-    They move in step deliberately: the rain steps every 200ms either way,
-    and only the marquee changes — 12 wipe steps of 13px at 50ms, versus 6
-    steps of 26px at 100ms. Changing `FRAME_MS` alone would quietly halve
-    the rain to a 400ms step, degrading the one thing the change was careful
-    to hold fixed.
+16. **Resolved 2026-08-23 by dropping the slide.** The numeral no longer
+    travels, so there is no left edge to watch and no sliver. Judge instead
+    whether ~600ms is the right hold: long enough to register on a fast
+    workspace switch, short enough not to sit on top of a bell wall you
+    wanted to see. `MARQUEE_MS` in `shared/km_weather.py` is the one knob.
+17. **Settled 2026-08-23: back to `FRAME_MS = 100` / `RAIN_DIV = 2`.** The
+    clock briefly ran at 50/4 to buy the sliding marquee 12 steps instead
+    of 6. With the slide gone, rain is the only thing on the clock, and
+    both pairs give it the same 200ms step — so 100/2 is the identical
+    picture for half the gate evaluations. Re-check that the rain's rhythm
+    still feels right and the loop feels unstrained. If either constant
+    ever moves again, move **both**: changing `FRAME_MS` alone silently
+    halves or doubles the rain's speed, which is exactly the trap this item
+    was written to catch.

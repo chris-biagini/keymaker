@@ -28,9 +28,9 @@ Overlays:
   Hyprland reports a screencast; submap badge beside it, dropped first on
   collision — same priority rule as today (`shared/km_text.py`: an unnoticed
   screencast is the costliest badge to miss).
-- **Marquee layer** (transient): on workspace switch, a large numeral wipes
-  across the screen for ~600ms, then reveals whichever base state is
-  underneath.
+- **Marquee layer** (transient): on workspace switch, a large numeral is
+  held centred for ~600ms, then reveals whichever base state is
+  underneath. (Originally a horizontal wipe; see §4.3.)
 
 Dropped entirely: the identity header (workspace number + name) and the
 focused-window title. Decision Chris, 2026-08-23 — "what's ringing right now"
@@ -134,11 +134,19 @@ wording — simpler, no binary asset, same look at arm's length.)*
 ### 4.3 Marquee (transient)
 
 On workspace switch (`ws.active` changes): the new workspace's large numeral
-wipes horizontally across the screen over ~600ms, then the layer hides.
-Epoch-anchored: capture `ticks_ms` at trigger, position is a pure function of
-elapsed; a new switch during playback restarts the epoch with the new
-numeral. Reuses the 48px digit assets. Runs on the frame clock; hidden
+appears centred and is held for ~600ms, then the layer hides.
+Epoch-anchored: capture `ticks_ms` at trigger, visibility is a pure function
+of elapsed; a new switch during playback restarts the epoch with the new
+numeral. Reuses the 48px digit assets. Retired on the frame clock; hidden
 otherwise, costing nothing.
+
+*(Amended 2026-08-23 after the hardware bench pass, Chris's call. This
+originally specified a horizontal wipe. On the pad it tore: sliding a 28×48
+tile 13px per frame dirties both the old and new rectangles while the SH1106
+scans out. A held numeral is written once on show and once on hide, which
+reads better and is also what §6's discipline wants. The frame clock returns
+to 100ms/RAIN_DIV 2 with the slide gone — rain is the only thing left on it,
+and its 200ms step is unchanged either way.)*
 
 ### 4.4 Badges (persistent overlay)
 
@@ -161,7 +169,7 @@ Cockpit's `_draw_text` and its text caches disappear. In their place:
   by diffing internally):
   - `set_weather(state)` — flips layer visibility
   - `set_bells(ordered_ws_list)` — repaints the wall by difference
-  - `marquee(ws)` — starts the wipe
+  - `marquee(ws)` — shows the numeral; `tick` retires it
   - `set_flags(rec, submap)` — badge layer
   - `tick(now)` — advances rain/marquee via the frame clock
 - Recency stamps live in Cockpit (it owns link state and messages); layout

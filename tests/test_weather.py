@@ -2,8 +2,8 @@ import random
 
 from km_weather import (SCREEN_W, SCREEN_H, BIG_W, BIG_H, SMALL_W, SMALL_H,
                         weather, update_stamps, bell_order, wall_layout,
-                        submap_badge, MARQUEE_MS, marquee_x, RainField,
-                        FrameClock)
+                        submap_badge, MARQUEE_MS, MARQUEE_X, MARQUEE_Y,
+                        marquee_visible, RainField, FrameClock)
 
 
 def plain_diff(a, b):
@@ -105,24 +105,26 @@ def test_submap_badge_empty_name_is_dropped():
     assert submap_badge("", 11) == ""
 
 
-def test_marquee_enters_from_right_edge():
-    assert marquee_x(0) == SCREEN_W
+def test_marquee_visible_for_its_whole_window():
+    assert marquee_visible(0)
+    assert marquee_visible(MARQUEE_MS - 1)
+    assert all(marquee_visible(t) for t in range(0, MARQUEE_MS, 50))
 
 
-def test_marquee_moves_monotonically_left():
-    xs = [marquee_x(t) for t in range(0, MARQUEE_MS, 50)]
-    assert all(b <= a for a, b in zip(xs, xs[1:]))
+def test_marquee_retires_at_the_end_and_before_the_start():
+    assert not marquee_visible(MARQUEE_MS)
+    assert not marquee_visible(MARQUEE_MS + 5000)
+    # negative elapsed: the caller's `now` predates the epoch by a clock
+    # read. ui.py clamps this to 0, but the function must not claim the
+    # numeral is live before its switch happened.
+    assert not marquee_visible(-1)
 
 
-def test_marquee_fully_exits_left_by_the_end():
-    # last in-flight position: the numeral is at most partially on screen
-    assert marquee_x(MARQUEE_MS - 1) <= 0
-
-
-def test_marquee_over_and_not_started_return_none():
-    assert marquee_x(MARQUEE_MS) is None
-    assert marquee_x(MARQUEE_MS + 5000) is None
-    assert marquee_x(-1) is None
+def test_marquee_numeral_is_centred_and_on_screen():
+    assert MARQUEE_X == (SCREEN_W - BIG_W) // 2
+    assert MARQUEE_Y == (SCREEN_H - BIG_H) // 2
+    assert 0 <= MARQUEE_X and MARQUEE_X + BIG_W <= SCREEN_W
+    assert 0 <= MARQUEE_Y and MARQUEE_Y + BIG_H <= SCREEN_H
 
 
 def collect(field, steps):
@@ -165,6 +167,31 @@ def test_rain_eventually_rains_and_eventually_clears_cells():
     assert "head" in kinds
     assert "dim" in kinds
     assert "off" in kinds
+
+
+def test_rain_trail_leaves_dark_rows_on_the_real_five_row_grid():
+    # terminalio.FONT is 6x12 on CircuitPython 10.x, so the grid the pad
+    # actually renders is 21x5, not the 21x8 every other test here uses.
+    # A trail as long as the grid lights every drop's whole column and the
+    # head/dim/off gradient stops reading as a trail -- the defect found at
+    # the bench 2026-08-23. Pin that the shortened trail always leaves at
+    # least one dark row behind a drop.
+    field = RainField(random.Random(13), cols=21, rows=5,
+                      trail_min=2, trail_span=2)
+    for _ in range(300):
+        field.step()
+        for d in field.drops.values():
+            assert d["len"] <= 3
+            assert d["len"] < field.rows
+
+
+def test_rain_trail_bounds_are_configurable_and_default_unchanged():
+    default = RainField(random.Random(2), cols=21, rows=8)
+    assert (default.trail_min, default.trail_span) == (3, 3)
+    for _ in range(200):
+        default.step()
+        for d in default.drops.values():
+            assert 3 <= d["len"] <= 5
 
 
 def test_rain_respects_max_drops():

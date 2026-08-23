@@ -9,16 +9,16 @@ Layer order, bottom to top (see Screen.__init__):
 
   0  rain     the rain TileGrid
   1  wall     the bell wall's numerals (shown only in "ringing")
-  2  marquee  the workspace-switch wipe numeral
+  2  marquee  the workspace-switch numeral, held centred for MARQUEE_MS
   3  badges   REC + [submap] + the "no link" tag; topmost, composited last
 
 The "no link" tag rides in the badge layer per the design spec section 4.4:
 that layer's semantics are "alarms that stay visible over everything", and a
 dead link is one. It is still driven purely by set_weather. (In practice the
-marquee can never wipe over it anyway -- a marquee needs a live link to fire.)
+marquee can never cover it anyway -- a marquee needs a live link to fire.)
 
 Every layer's palette makes color 0 transparent, so the layers composite
-rather than occlude: the marquee slides over whatever base state is live,
+rather than occlude: the marquee sits over whatever base state is live,
 and the badges sit on top of everything.
 
 Layer *visibility* is derived, never assigned ad hoc: `_sync_layers` is the
@@ -44,14 +44,14 @@ from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 import km_weather
 from assets.digits import DIGITS
 
-# 50ms rather than the spec's 100 so the 600ms marquee gets 12 wipe steps
-# instead of 6 -- at 100ms the numeral jumps 26px a frame and reads as a
-# slideshow, and legible motion is the marquee's whole job. RAIN_DIV moves in
-# step so the rain's period is unchanged at 200ms; the only cost is that the
-# frame gate is evaluated twice as often, which is nothing next to the
-# unthrottled loop it already sits in (docs/pad-timing.md section 1).
-FRAME_MS = 50                # animation clock, 20 fps
-RAIN_DIV = 4                 # rain advances every 4th frame (~5 fps)
+# Back to the spec's 100/2 after the bench pass. These briefly ran at 50/4,
+# which bought the sliding marquee 12 steps instead of 6; the slide is gone
+# (it tore), and rain is now the only thing on this clock. Both pairs give
+# the same 200ms rain step, so 100/2 is the same picture for half the gate
+# evaluations. Change them together or not at all: moving FRAME_MS alone
+# silently halves or doubles the rain.
+FRAME_MS = 100               # animation clock, 10 fps
+RAIN_DIV = 2                 # rain advances every 2nd frame (~5 fps)
 RAIN_GLYPHS = "01<>=+*:#$KMTXZ7"          # 16 glyphs, matrix-flavored
 
 _KIND_BANK = {"head": 0, "dim": 1}        # tile-sheet banks; "off" = blank
@@ -177,7 +177,19 @@ class Screen:
         self._rain_grid = displayio.TileGrid(
             sheet, pixel_shader=pal, width=cols, height=rows,
             tile_width=gw, tile_height=gh, default_tile=0)
-        self._field = km_weather.RainField(random, cols, rows, glyphs=n)
+        # Trail length scales with the grid's real height. terminalio.FONT is
+        # 6x12 on CircuitPython 10.x, so `rows` is 5, not the 8 an assumed
+        # 6x8 would give -- and the default 3-5 trail lights a drop's entire
+        # column there, flattening the head/dim/off gradient into a solid bar
+        # (bench 2026-08-23: the ~4px dead strip below the grid is the 6x12
+        # tell). Short grids get a 2-3 trail so every drop still leaves dark
+        # rows behind it. The threshold is `rows < 7`, not `== 5`, so a
+        # future font change lands on the right side of it by itself.
+        if rows < 7:
+            self._field = km_weather.RainField(random, cols, rows, glyphs=n,
+                                               trail_min=2, trail_span=2)
+        else:
+            self._field = km_weather.RainField(random, cols, rows, glyphs=n)
         self._rain_group = displayio.Group()
         self._rain_group.append(self._rain_grid)
 
@@ -300,19 +312,22 @@ class Screen:
             self._display.auto_refresh = True
 
     def marquee(self, ws):
-        """Start the workspace-switch wipe. Event-driven, not per-tick."""
-        # Swap the numeral, park it fully off the right edge, and unhide --
-        # three steps, so the panel is suspended across them. It starts at
-        # x = SCREEN_W (entirely off screen), so unhiding shows nothing until
-        # tick() first moves it; there is no flash at the wrong position.
+        """Show the workspace numeral, centred, for MARQUEE_MS. Event-driven,
+        not per-tick: this writes once and tick() only retires it."""
+        # Swap the numeral and unhide -- two steps, so the panel is suspended
+        # across them. The numeral is placed at its final centred position
+        # immediately, which is the entire point: the earlier design slid it
+        # across at 13px per frame, and dirtying both the old and new
+        # rectangles every frame while the SH1106 scanned out tore visibly
+        # (bench 2026-08-23). A held numeral costs one write on show, one on
+        # hide, and nothing in between.
         self._display.auto_refresh = False
         try:
             while len(self._marquee_group):
                 self._marquee_group.pop()
             tg = displayio.TileGrid(
                 self._big[ws % 10], pixel_shader=self._pal,
-                x=km_weather.SCREEN_W,
-                y=(km_weather.SCREEN_H - km_weather.BIG_H) // 2)
+                x=km_weather.MARQUEE_X, y=km_weather.MARQUEE_Y)
             self._marquee_group.append(tg)
             self._marquee_tile = tg
             _set_hidden(self._marquee_group, False)
@@ -359,29 +374,26 @@ class Screen:
             return
 
         if self._marquee_epoch is not None:
-            # marquee_x is a pure function of elapsed time, so a slow tick
-            # skips ahead rather than stretching the wipe. x runs from
-            # SCREEN_W down to -(BIG_W - 1); displayio clips a TileGrid that
-            # hangs off either edge, so no write lands outside 128x64.
+            # marquee_visible is a pure function of elapsed time, so a slow
+            # tick retires the numeral on schedule rather than stretching its
+            # stay. The numeral never moves, so this branch touches the panel
+            # exactly once per switch -- on the frame that hides it.
             #
             # The clamp is load-bearing. marquee() seeds the epoch from its
             # own ticks_ms() read, while `now` was read by the caller earlier
             # in the same loop iteration -- so if the frame gate fires on the
-            # very iteration that started the wipe, elapsed is NEGATIVE.
-            # marquee_x returns None for that, which would look identical to
-            # "finished" and silently cancel the wipe before it drew a frame.
+            # very iteration that started it, elapsed is NEGATIVE.
+            # marquee_visible is False for that, which would look identical to
+            # "finished" and silently cancel the numeral before it was seen.
             # Clamping keeps this file independent of the caller's clock-read
-            # ordering; the cost is that a wipe can begin one frame late,
-            # which is 50ms and invisible.
+            # ordering; the cost is that it can retire one frame late, which
+            # is 50ms and invisible.
             elapsed = ticks_diff(now, self._marquee_epoch)
             if elapsed < 0:
                 elapsed = 0
-            x = km_weather.marquee_x(elapsed)
-            if x is None:
+            if not km_weather.marquee_visible(elapsed):
                 self._marquee_epoch = None
                 _set_hidden(self._marquee_group, True)
-            elif self._marquee_tile.x != x:
-                self._marquee_tile.x = x
 
         # Rain runs at a whole-number division of the frame clock. On a
         # catch-up burst the accumulator resets rather than stepping the

@@ -22,9 +22,10 @@ A single app: **Cockpit**, the split deck.
   pulsing. Tap to jump to that window.
 - The OLED is a weather display: sparse digital rain while all is calm, and
   when terminal bells ring elsewhere, a wall of workspace numerals sized by
-  recency — the newest bell largest. A workspace switch wipes a marquee
-  numeral across the screen; REC and submap badges overlay everything while
-  the screen is being captured or a submap is active.
+  recency — the newest bell largest. A workspace switch flashes that
+  workspace's numeral, big and centred, for a moment; REC and submap badges
+  overlay everything while the screen is being captured or a submap is
+  active.
 - Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
   works the same over mosh as it does locally.
 - The knob is currently unassigned.

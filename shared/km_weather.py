@@ -85,17 +85,25 @@ def submap_badge(submap, max_len):
 
 
 MARQUEE_MS = 600
+MARQUEE_X = (SCREEN_W - BIG_W) // 2     # centred: reads as a notification,
+MARQUEE_Y = (SCREEN_H - BIG_H) // 2     # not as the wall's left-field state
 
 
-def marquee_x(elapsed_ms):
-    """Left edge of the wipe numeral, traversing right edge to fully off
-    left in MARQUEE_MS. None = not in flight (layer should hide). Pure
-    function of elapsed time so a slow tick skips ahead instead of lagging
-    (docs/pad-timing.md section 3)."""
-    if elapsed_ms < 0 or elapsed_ms >= MARQUEE_MS:
-        return None
-    span = SCREEN_W + BIG_W
-    return SCREEN_W - (span * elapsed_ms) // MARQUEE_MS
+def marquee_visible(elapsed_ms):
+    """True while the workspace numeral is held on screen, for MARQUEE_MS
+    from the switch. Pure function of elapsed time, so a slow tick retires
+    the numeral on schedule instead of lagging (docs/pad-timing.md
+    section 3).
+
+    This started life as a horizontal wipe (marquee_x, returning a moving
+    left edge). Bench pass 2026-08-23 rejected it: sliding a 28x48 tile
+    13px per frame dirties both the old and new rectangles while the SH1106
+    scans out, which tore visibly. A held numeral is written once and then
+    costs nothing, which is both what the panel wants and what section 5
+    wants. The name "marquee" is kept because that is what the whole
+    feature is called end to end.
+    """
+    return 0 <= elapsed_ms < MARQUEE_MS
 
 
 _SPAWN_P = 0.35              # per-step chance of trying to start a new drop
@@ -111,12 +119,23 @@ class RainField:
     glyphs behind it, erased from the tail.
     """
 
-    def __init__(self, rng, cols, rows, glyphs=16, max_drops=10):
+    def __init__(self, rng, cols, rows, glyphs=16, max_drops=10,
+                 trail_min=3, trail_span=3):
+        # trail_min/trail_span set drop length: trail_min + randrange(span).
+        # They are parameters rather than constants because the grid's height
+        # depends on terminalio.FONT's real glyph box, which is 6x12 on
+        # CircuitPython 10.x -- five rows, not the eight an assumed 6x8 would
+        # give. At five rows the default 3-5 trail lights every drop's whole
+        # column and the head/dim/off gradient stops reading as a trail at
+        # all, so the drawing edge shortens it. Confirmed at the bench
+        # 2026-08-23 by the ~4px dead strip below the grid.
         self.rng = rng
         self.cols = cols
         self.rows = rows
         self.glyphs = glyphs
         self.max_drops = max_drops
+        self.trail_min = trail_min
+        self.trail_span = trail_span
         self.drops = {}          # col -> {"head": row, "len": n, "glyph": i}
 
     def step(self):
@@ -139,7 +158,8 @@ class RainField:
             if col not in self.drops:
                 glyph = self.rng.randrange(self.glyphs)
                 self.drops[col] = {"head": 0,
-                                   "len": 3 + self.rng.randrange(3),
+                                   "len": self.trail_min
+                                          + self.rng.randrange(self.trail_span),
                                    "glyph": glyph}
                 changes.append((col, 0, "head", glyph))
         return changes
