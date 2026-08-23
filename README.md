@@ -20,9 +20,12 @@ A single app: **Cockpit**, the split deck.
   its `ws-*` session first (each keeping the palette cell of its tmux index),
   then sessionless terminals. Focused full-bright, others dimmed, bell
   pulsing. Tap to jump to that window.
-- The OLED shows an identity header (workspace number and name, plus
-  REC/submap badges) and the focused window's title, scrolling if it
-  doesn't fit. Its fuller design is deliberately still open.
+- The OLED is a weather display: sparse digital rain while all is calm, and
+  when terminal bells ring elsewhere, a wall of workspace numerals sized by
+  recency — the newest bell largest. A workspace switch wipes a marquee
+  numeral across the screen; a REC badge overlays everything while the
+  screen is being captured. Design:
+  [docs/specs/2026-08-23-oled-weather-design.md](docs/specs/2026-08-23-oled-weather-design.md).
 - Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
   works the same over mosh as it does locally.
 - The knob is currently unassigned.
@@ -40,7 +43,8 @@ Two programs, one protocol, each side optional to the other:
 
 - **Firmware** (CircuitPython 10.x + `adafruit_macropad`) owns everything
   latency-critical or standalone: drawing, LEDs, key handling. Unplug the
-  daemon and the pad shows a quiet idle card instead of pretending.
+  daemon and the pad keeps its rain running with a small `no link` tag
+  instead of pretending.
 - **Daemon** (`keymakerd`, Python ≥3.11, stdlib + pyserial) owns everything
   host-shaped: Hyprland state in and actuation out (via Hyprland's IPC
   sockets — no synthetic keystrokes), tmux window state, and the Omarchy
