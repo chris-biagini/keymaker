@@ -39,3 +39,31 @@ def bell_order(stamps, diff):
         return []
     ref = next(iter(stamps.values()))
     return sorted(stamps, key=lambda ws: (-diff(stamps[ws], ref), ws))
+
+
+SCREEN_W = 128
+SCREEN_H = 64
+BIG_W, BIG_H = 28, 48        # 2x nearest-neighbor upscale of the small digit
+SMALL_W, SMALL_H = 14, 24
+_SMALL_GAP = 4
+_SMALL_X0 = 40               # first small sits right of the big numeral
+_BIG_XY = (4, 8)             # (128-28 leaves right field; 64-48 centers at 8)
+_SMALL_Y = 20                # (64-24)//2
+
+
+def wall_layout(order):
+    """Place bell-wall numerals: newest big on the left, the rest in a row.
+
+    Five smalls at pitch SMALL_W+4 starting at x=40 end at x=126 -- the
+    worst case (all six workspaces ringing) fits 128px exactly. A vertical
+    stack would not fit: two 24px numerals already exceed nothing, but five
+    do not fit 64px.
+    """
+    if not order:
+        return []
+    out = [(order[0], "big", _BIG_XY[0], _BIG_XY[1])]
+    x = _SMALL_X0
+    for ws in order[1:6]:
+        out.append((ws, "small", x, _SMALL_Y))
+        x += SMALL_W + _SMALL_GAP
+    return out

@@ -54,3 +54,37 @@ def test_bell_order_survives_tick_wraparound():
 
     stamps = {1: period - 10, 2: 5}      # ws 2 stamped 15 ticks AFTER ws 1
     assert bell_order(stamps, wrap_diff) == [2, 1]
+
+
+from km_weather import (SCREEN_W, SCREEN_H, BIG_W, BIG_H, SMALL_W, SMALL_H,
+                        wall_layout)
+
+
+def test_wall_layout_single_bell_is_one_big_numeral():
+    assert wall_layout([3]) == [(3, "big", 4, 8)]
+
+
+def test_wall_layout_two_bells():
+    assert wall_layout([5, 2]) == [(5, "big", 4, 8), (2, "small", 40, 20)]
+
+
+def test_wall_layout_six_bells_all_fit_on_screen():
+    placed = wall_layout([6, 5, 4, 3, 2, 1])
+    assert placed[0] == (6, "big", 4, 8)
+    assert [p[0] for p in placed[1:]] == [5, 4, 3, 2, 1]
+    assert [p[1] for p in placed[1:]] == ["small"] * 5
+    for ws, size, x, y in placed:
+        w = BIG_W if size == "big" else SMALL_W
+        h = BIG_H if size == "big" else SMALL_H
+        assert 0 <= x and x + w <= SCREEN_W
+        assert 0 <= y and y + h <= SCREEN_H
+
+
+def test_wall_layout_smalls_are_evenly_spaced():
+    placed = wall_layout([1, 2, 3, 4])
+    xs = [p[2] for p in placed[1:]]
+    assert xs == [40, 58, 76]            # SMALL_W + 4 gap
+
+
+def test_wall_layout_empty():
+    assert wall_layout([]) == []
