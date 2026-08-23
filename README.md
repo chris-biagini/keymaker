@@ -23,9 +23,8 @@ A single app: **Cockpit**, the split deck.
 - The OLED is a weather display: sparse digital rain while all is calm, and
   when terminal bells ring elsewhere, a wall of workspace numerals sized by
   recency — the newest bell largest. A workspace switch wipes a marquee
-  numeral across the screen; a REC badge overlays everything while the
-  screen is being captured. Design:
-  [docs/specs/2026-08-23-oled-weather-design.md](docs/specs/2026-08-23-oled-weather-design.md).
+  numeral across the screen; REC and submap badges overlay everything while
+  the screen is being captured or a submap is active.
 - Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
   works the same over mosh as it does locally.
 - The knob is currently unassigned.
@@ -57,7 +56,8 @@ Two programs, one protocol, each side optional to the other:
 The split deck's original design lives in
 [docs/specs/2026-08-15-cockpit-v2-design.md](docs/specs/2026-08-15-cockpit-v2-design.md)
 (the 2026-08-22 switchboard-operator spec describes a sticky-slot design that
-was tried and reverted the same day).
+was tried and reverted the same day); the OLED's weather display design lives
+in [docs/specs/2026-08-23-oled-weather-design.md](docs/specs/2026-08-23-oled-weather-design.md).
 
 ## Requirements
 

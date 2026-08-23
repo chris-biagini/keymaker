@@ -1191,34 +1191,36 @@ the bench.
    time, not just most times, and the base state underneath is intact once
    it resolves.
 7. Start a screen share (or `wf-recorder`): the `REC` badge appears
-   top-right, legible over both rain and the bell wall; stop and confirm it
-   clears. Separately, trigger a submap and confirm its badge is also
-   legible over both rain and the bell wall, and that when both would
-   apply at once the submap badge is the one that drops.
-8. Leave it in calm for five minutes: no drift, no creeping artifacts, rain
-   keeps its rhythm.
-9. Look closely at individual rain glyphs: each should read as a whole,
-   correctly-formed character, not a fragment of a neighboring one. Also
-   check for a dead strip (roughly 4px) along the bottom of the panel,
-   behind where the `no link` tag sits — its presence would mean
-   `terminalio.FONT` is actually 6×12 on this CircuitPython build rather
-   than the assumed 6×8, and the rain grid should be 21×5.
-10. Judge whether the checkerboard dither behind each raindrop reads as
+   top-right, legible over rain; stop and confirm it clears.
+8. Start a screen share while the bell wall is up: the `REC` badge is still
+   legible, layered over the wall of numerals.
+9. Trigger a submap: its badge appears, legible over both rain and the bell
+   wall, and when a screen share is also active at the same time, the
+   submap badge is the one that drops rather than REC.
+10. Leave it in calm for five minutes: no drift, no creeping artifacts,
+    rain keeps its rhythm.
+11. Look closely at individual rain glyphs: each should read as a whole,
+    correctly-formed character, not a fragment of a neighboring one.
+12. Check for a dead strip (roughly 4px) along the bottom of the panel,
+    behind where the `no link` tag sits — its presence would mean
+    `terminalio.FONT` is actually 6×12 on this CircuitPython build rather
+    than the assumed 6×8, and the rain grid should be 21×5.
+13. Judge whether the checkerboard dither behind each raindrop reads as
     "dim"/grey at arm's length, or just reads as noise. This is the 1-bit
     stand-in for a 50% grey trail — if it doesn't read, the rain has no
     depth.
-11. Time the pad's boot. If startup is slow enough to notice, the cause is
+14. Time the pad's boot. If startup is slow enough to notice, the cause is
     the roughly 8,500 interpreted `Bitmap` writes done at import to build
     the digit bitmaps, and the fix is pre-baking the upscaled bitmaps
     instead of computing them at boot.
-12. While the bell wall is visible, force a change in bell order (e.g. bell
+15. While the bell wall is visible, force a change in bell order (e.g. bell
     a third workspace) and watch for a flicker or a blank frame during the
     rebuild — `auto_refresh = False` should suppress any visible scan-out
     mid-rebuild.
-13. Watch the marquee's left edge as the numeral exits the screen: note
+16. Watch the marquee's left edge as the numeral exits the screen: note
     whether a small sliver visibly pops off rather than sliding fully
     clear, and judge whether it's worth addressing.
-14. Judge whether the display feels smooth or the loop feels strained at
+17. Judge whether the display feels smooth or the loop feels strained at
     the current frame clock (`FRAME_MS = 50`, rain advancing every 4th
     frame). If it strains, reverting to `FRAME_MS = 100` / `RAIN_DIV = 4`
     halves the marquee's smoothness but is a two-constant change.
