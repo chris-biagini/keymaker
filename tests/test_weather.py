@@ -88,3 +88,26 @@ def test_wall_layout_smalls_are_evenly_spaced():
 
 def test_wall_layout_empty():
     assert wall_layout([]) == []
+
+
+from km_weather import MARQUEE_MS, marquee_x
+
+
+def test_marquee_enters_from_right_edge():
+    assert marquee_x(0) == SCREEN_W
+
+
+def test_marquee_moves_monotonically_left():
+    xs = [marquee_x(t) for t in range(0, MARQUEE_MS, 50)]
+    assert all(b <= a for a, b in zip(xs, xs[1:]))
+
+
+def test_marquee_fully_exits_left_by_the_end():
+    # last in-flight position: the numeral is at most partially on screen
+    assert marquee_x(MARQUEE_MS - 1) <= 0
+
+
+def test_marquee_over_and_not_started_return_none():
+    assert marquee_x(MARQUEE_MS) is None
+    assert marquee_x(MARQUEE_MS + 5000) is None
+    assert marquee_x(-1) is None

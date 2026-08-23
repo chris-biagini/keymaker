@@ -67,3 +67,17 @@ def wall_layout(order):
         out.append((ws, "small", x, _SMALL_Y))
         x += SMALL_W + _SMALL_GAP
     return out
+
+
+MARQUEE_MS = 600
+
+
+def marquee_x(elapsed_ms):
+    """Left edge of the wipe numeral, traversing right edge to fully off
+    left in MARQUEE_MS. None = not in flight (layer should hide). Pure
+    function of elapsed time so a slow tick skips ahead instead of lagging
+    (docs/pad-timing.md section 3)."""
+    if elapsed_ms < 0 or elapsed_ms >= MARQUEE_MS:
+        return None
+    span = SCREEN_W + BIG_W
+    return SCREEN_W - (span * elapsed_ms) // MARQUEE_MS
