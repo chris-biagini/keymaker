@@ -3,18 +3,21 @@ import asyncio
 import json
 import os
 
-import km_deck
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import hyprland, ledtest, tmux
-from .deck_store import DeckStore
 from .serial_link import SerialLink
 from .theme import ThemeWatcher
 
 PING_S = 5.0
 DEBOUNCE_S = 0.1
 CTX_POLL_S = 1.0
+
+# LineCodec discards lines over 1024 bytes WHOLE, so an unbounded window name
+# would silently blank the pad rather than truncate. Six items at this cap plus
+# JSON overhead sits far under the limit.
+CTX_NAME_MAX = 20
 
 
 @dataclass
@@ -31,23 +34,13 @@ class Supervisor:
         self.cfg = cfg
         self.state = hyprland.HyprState()
         self.palette = None
-        self.deck_store = DeckStore(cfg.state_dir / "deck-slots.json")
-        self.deck = km_deck.Deck(self.deck_store.load())
-        self.deck_page = 0
-        self.deck_msg = None
-        # Cache of the deck poll's tmux windows, keyed by id ("tmux:@N"), and of
-        # session -> ws-* client address -- both needed at tap time to focus a
-        # window, but only cheaply available inside the poll that already fetched
-        # them. Empty until the first deck poll lands, so an early tap is a no-op
-        # rather than a KeyError.
-        self._deck_twins = {}
-        self._deck_wins = []
-        self._deck_ws_addr = {}
-        # Last (colors, focused, bells) _poll_deck computed, so a knob gesture can
-        # re-render the deck message SYNCHRONOUSLY instead of waiting up to
-        # CTX_POLL_S for the next poll -- a knob that takes a second to respond
-        # reads as a broken control. None until the first poll lands.
-        self._deck_render_args = None
+        # The bottom deck. ctx_items keeps the full items (jump targets
+        # included) for tap resolution; ctx_msg is the last WIRE message, kept
+        # separately so dedup compares what the pad actually saw. Empty/None
+        # until the first poll lands, so an early tap is a no-op rather than an
+        # IndexError.
+        self.ctx_items = []
+        self.ctx_msg = None
         self.link = SerialLink(cfg.device, on_msg=self._on_pad_msg,
                                on_up=self._on_link_up, on_down=self._on_link_down)
         self._refresh_wanted = asyncio.Event()
@@ -74,144 +67,28 @@ class Supervisor:
         self.link.send({"t": "hello", "host": "keymakerd", "proto": 1})
         if self.palette:
             self.link.send(self.palette)
-        # The deck is the switchboard itself: a reconnecting pad (USB reset, a
-        # firmware deploy, the app-menu round trip in framework.py, which also
-        # re-sends `hello`) otherwise starts from its empty default deck and
-        # stays that way until some UNRELATED window opens/closes/renames --
-        # _poll_deck's dedup guard stays silent because the computed message
-        # hasn't changed, even though the pad has never seen it. None only
-        # before the first poll has ever landed; nothing to send yet then.
-        if self.deck_msg is not None:
-            self.link.send(self.deck_msg)
+        for m in self.state.snapshot():
+            self.link.send(m)
+        # A reconnecting pad (USB reset, a firmware deploy, which also re-sends
+        # `hello`) otherwise starts from an empty bottom deck and stays that
+        # way until some unrelated window change beats _poll_ctx's dedup guard.
+        # None only before the first poll has ever landed; nothing to send yet.
+        if self.ctx_msg is not None:
+            self.link.send(self.ctx_msg)
         self.link.send(self._flags_msg())
 
     def _on_link_down(self):
         # Force the next poll to re-emit even if nothing about the windows has
         # changed -- see _on_link_up's resend above for why a dedup-suppressed
-        # deck otherwise leaves a reconnected pad blank.
-        self.deck_msg = None
+        # ctx otherwise leaves a reconnected pad blank.
+        self.ctx_msg = None
 
     async def _on_palette(self, pal):
-        # Store and forward, nothing else. This used to probe the theme dir for
-        # Omarchy's light.mode marker and stash the answer on HyprState.light --
-        # whose only reader was a ws_color() parameter documented as ignored, so
-        # the whole light/dark chain moved no pixel. Colorhash's LED surface is a
-        # physical WS2812 rendering with no theme ground to contrast against.
-        # self.palette is kept because _on_link_up re-sends it: a pad that
-        # reconnects mid-session has no palette until the next theme change.
+        # Store and forward. self.palette is kept because _on_link_up re-sends
+        # it: a pad that reconnects mid-session has no palette until the next
+        # theme change.
         self.palette = pal
         self.link.send(pal)
-
-    # ---- deck -------------------------------------------------------
-    def save_deck(self):
-        self.deck_store.save(self.deck.slots)
-
-    def _deck_msg(self, colors, focused, bells):
-        # Clamp rather than trust: windows closing can shrink the page count out
-        # from under a page the knob already selected.
-        self.deck_page = min(self.deck_page, self.deck.page_count() - 1)
-        return self.deck.message(self.deck_page, colors,
-                                 focused=focused, bells=bells)
-
-    def _resend_deck(self):
-        """Re-render and (if changed) send the deck message immediately, from the
-        last (colors, focused, bells) _poll_deck computed. Called by the knob
-        handlers so a mode toggle or a page change doesn't wait up to
-        CTX_POLL_S for the next poll to reach the pad -- a knob that takes a
-        second to respond reads as a broken control. A no-op before the first
-        poll has landed (nothing to render yet, and no live windows to lose)."""
-        if self._deck_render_args is None:
-            return
-        colors, focused, bells = self._deck_render_args
-        msg = self._deck_msg(colors, focused, bells)
-        if msg != self.deck_msg:
-            self.deck_msg = msg
-            self.link.send(msg)
-
-    def on_rekey(self):
-        """Drop every slot assignment and re-derive from workspace order.
-
-        Ghosts go too: a re-key is a fresh board, and a completion marker kept
-        against a slot that no longer means the same thing is worse than a lost
-        one. No service restart -- clearing deck-slots.json by hand and bouncing
-        the unit was only ever a way to reach this state.
-
-        A no-op before the first poll has landed: self._deck_wins would be []
-        (mirrors _resend_deck's own guard on _deck_render_args), and updating
-        against an empty window list would wipe every slot restored from disk
-        AND persist that empty board to deck-slots.json -- destroying it, not
-        just displaying it wrong until the next poll.
-        """
-        if not self._deck_wins:
-            return
-        self.deck.slots = {}
-        self.deck.ghosts = {}
-        self.deck.update(self._deck_wins)
-        self.save_deck()
-        self._resend_deck()
-
-    def on_knob_turn(self, delta):
-        pages = self.deck.page_count()
-        self.deck_page = (self.deck_page + delta + pages) % pages
-        self._resend_deck()
-
-    def on_tap(self, slot):
-        """Key press on the current page. Returns what happened, for tests."""
-        if not 0 <= slot < km_deck.SLOTS_PER_PAGE:
-            return None          # the pad has 12 keys; anything else is a bad frame
-        gslot = self.deck_page * km_deck.SLOTS_PER_PAGE + slot
-        if self.deck.dismiss(gslot):
-            self.save_deck()
-            return "dismissed"
-        for wid, s in self.deck.slots.items():
-            if s == gslot:
-                return wid              # caller focuses it; see _focus_deck_window
-        return None
-
-    def _focused_window_id(self, twins):
-        """The id (see km_deck) of the window that currently holds focus, or None.
-
-        A tmux window counts as focused when its session is the ws-* client
-        living on the active workspace AND tmux itself reports it active --
-        matching deck_windows' notion of "the window you'd land in" rather than
-        Hyprland's, since the ws-* terminal can hold Hyprland focus while any of
-        its tmux windows is the one actually on screen. Falls back to the plain
-        Hyprland-focused client id (covers sessionless terminals and the case
-        where the focused client isn't a ws-* terminal at all).
-        """
-        client = self.state.fg.get(self.state.active)
-        if client is not None:
-            session = client["cls"].removeprefix("ws-")
-            for w in twins:
-                if w["s"] == session and w["active"]:
-                    return w["id"]
-        if self.state.addr:
-            return "hypr:" + self.state.addr
-        return None
-
-    async def _focus_deck_window(self, wid):
-        """Focus a window returned by on_tap. Mirrors _activate_window's shape:
-        bring the right Hyprland client forward first (a no-op if it's already
-        focused), then select the tmux window inside it."""
-        if wid.startswith("tmux:"):
-            twin = self._deck_twins.get(wid)
-            if twin is None:
-                return
-            addr = self._deck_ws_addr.get(twin["s"])
-            if addr and addr != self.state.addr:
-                await self._dispatch(f"dispatch focuswindow address:{addr}")
-            if not await tmux.select_window(twin["s"], twin["i"]):
-                print(f"keymakerd: deck select-window {twin['s']}:{twin['i']} failed",
-                      flush=True)
-        elif wid.startswith("hypr:"):
-            addr = wid.removeprefix("hypr:")
-            if addr != self.state.addr:
-                await self._dispatch(f"dispatch focuswindow address:{addr}")
-
-    async def _on_tap(self, slot):
-        result = self.on_tap(slot)
-        if result and result != "dismissed":
-            await self._focus_deck_window(result)
 
     # ---- inbound from pad -----------------------------------------
     def _on_pad_msg(self, msg):
@@ -220,12 +97,13 @@ class Supervisor:
             self._spawn(self._on_link_up(), "link-up")
         elif t == "key":
             n = int(msg.get("n", 0))
-            if msg.get("act") == "tap":                   # hold is reserved: no-op
-                self._spawn(self._on_tap(n), "deck-tap")
-        elif t == "dial":
-            self.on_knob_turn(int(msg.get("d", 0)))
-        elif t == "rekey":
-            self.on_rekey()
+            if 0 <= n < 6:                                # top half: workspaces 1-6
+                verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
+                if verb != "workspace":                   # holds are rare and destructive; log for forensics
+                    print(f"keymakerd: hold key {n} -> {verb} {n + 1}", flush=True)
+                self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
+            elif 6 <= n <= 11 and msg.get("act") == "tap":
+                self._spawn(self._activate_item(n - 6), "ctx-activate")
 
     async def _dispatch(self, cmd):
         # Swallow transient IPC failures WITHOUT clearing _instance:
@@ -239,9 +117,23 @@ class Supervisor:
             except OSError as e:
                 print(f"keymakerd: dispatch failed ({e!r}): {cmd}", flush=True)
 
-    # `_activate_window` (the old ctx-based bottom-half tap handler) is retired:
-    # `_focus_deck_window` below does the same job -- focus the client, then
-    # select-window -- against deck slots instead of ctx's fixed 6-11 range.
+    async def _activate_item(self, offset):
+        """Tap on a bottom key: focus the item's Hyprland client if it isn't
+        focused (the deck is workspace-aware, not focus-gated), then select the
+        tmux window inside it where there is one. The items list is a snapshot
+        taken at tap time so a poll racing this coroutine cannot swap the
+        target under it."""
+        items = self.ctx_items
+        if not 0 <= offset < len(items):
+            return
+        item = items[offset]
+        addr = item.get("addr")
+        if addr and addr != self.state.addr:
+            await self._dispatch(f"dispatch focuswindow address:{addr}")
+        if "s" in item:
+            if not await tmux.select_window(item["s"], item["i"]):
+                print(f"keymakerd: select-window {item['s']}:{item['i']} failed",
+                      flush=True)
 
     # ---- hyprland side --------------------------------------------
     async def _hypr_events(self):
@@ -285,7 +177,8 @@ class Supervisor:
                 clients = json.loads(await hyprland.request(self._instance, "j/clients"))
             except (OSError, ValueError):
                 continue
-            self.state.refresh(ws, aw, win, clients)
+            for m in self.state.refresh(ws, aw, win, clients):
+                self.link.send(m)
 
     async def _pinger(self):
         while True:
@@ -295,9 +188,13 @@ class Supervisor:
     async def _poll_loop(self):
         while True:
             await asyncio.sleep(CTX_POLL_S)
-            await self._poll_deck()
+            await self._poll_ctx()
 
-    async def _poll_deck(self):
+    async def _poll_ctx(self):
+        # The bottom deck is WORKSPACE-aware, not focus-gated: keys 6-11 track
+        # the windows living on the active workspace whether or not one of them
+        # holds focus, so the deck stays lit while you're in the browser next
+        # to it.
         try:
             if not self.state.clients:
                 return          # no Hyprland snapshot yet; a wipe here would be a lie
@@ -306,30 +203,22 @@ class Supervisor:
                 # tmux unavailable (server down) is NOT "tmux has no windows":
                 # a bare terminal earns a key purely from state.clients and has
                 # nothing to do with tmux's health. Continue with an empty tmux
-                # side so the sessionless half of the deck still renders, rather
-                # than aborting the whole poll over an outage unrelated to it.
+                # side so the sessionless keys still render.
                 twins = []
-            self._deck_twins = {w["id"]: w for w in twins}
-            self._deck_ws_addr = {
-                str(c.get("class", ""))[3:]: str(c.get("address", ""))
-                for c in self.state.clients if str(c.get("class", "")).startswith("ws-")
-            }
-            wins = hyprland.deck_windows(twins, self.state.clients)
-            self._deck_wins = wins
-            before = dict(self.deck.slots)
-            self.deck.update(wins)
-            if self.deck.slots != before:
-                self.save_deck()
-            colors = hyprland.deck_colors(wins)
-            bells = hyprland.deck_bells(twins, self.state._urgent_addrs, self.state.clients)
-            focused = self._focused_window_id(twins)
-            self._deck_render_args = (colors, focused, bells)
-            msg = self._deck_msg(colors, focused, bells)
-            if msg != self.deck_msg:
-                self.deck_msg = msg
+            bells = hyprland.deck_bells(twins, self.state._urgent_addrs,
+                                        self.state.clients)
+            items = hyprland.ctx_windows(twins, self.state.clients,
+                                         self.state.active, hyprland.led_palette(),
+                                         focused_addr=self.state.addr, bells=bells)
+            self.ctx_items = items
+            msg = {"t": "ctx", "items": [
+                {"n": it["n"][:CTX_NAME_MAX], "c": it["c"],
+                 "active": it["active"], "bell": it["bell"]} for it in items]}
+            if msg != self.ctx_msg:
+                self.ctx_msg = msg
                 self.link.send(msg)
         except Exception as e:
-            print(f"keymakerd: deck poll failed: {e!r}", flush=True)
+            print(f"keymakerd: ctx poll failed: {e!r}", flush=True)
 
     async def run(self):
         theme = ThemeWatcher(self.cfg.home, self._on_palette)

@@ -1,14 +1,15 @@
-"""OLED layout: inverted header / focused window / four legend rows over a
-state-gutter bitmap. Spec section 5."""
+"""OLED layout: inverted header + focused-window line.
+
+Deliberately minimal: the split deck carries its information on the keys, and
+the OLED's real design is a separate piece of work. When extending this, mind
+docs/pad-timing.md -- Label.text has no equality short-circuit, so callers must
+cache what they last wrote and skip redundant writes.
+"""
 import displayio
 import terminalio
 from adafruit_display_text import label
 
-import km_deck
-
 WIDTH_CHARS = 21   # 128px / 6px font
-MAP_Y = 23         # bitmap origin; rows 23-61
-MAP_H = 39
 
 
 class Screen:
@@ -17,32 +18,8 @@ class Screen:
         self.header = label.Label(terminalio.FONT, text="", x=0, y=6,
                                   color=0x000000, background_color=0xFFFFFF)
         self.focus = label.Label(terminalio.FONT, text="", x=0, y=18)
-        # Legend text sits at x=5 so the 4px state gutter at x=1 stays clear.
-        # Rows are 10px apart, matching km_deck.GUTTER_PITCH_Y.
-        self.rows = [label.Label(terminalio.FONT, text="", x=5, y=29 + i * 10)
-                     for i in range(km_deck.LEGEND_ROWS)]
-        self.map_bmp = displayio.Bitmap(128, MAP_H, 2)
-        pal = displayio.Palette(2)
-        pal[0] = 0x000000
-        pal[1] = 0xFFFFFF
-        # Index 0 must be transparent, and this TileGrid must be appended
-        # BEFORE the legend labels below. The bitmap's rows (23-61) are
-        # exactly the legend rows (5.1), so layering here is load-bearing: a
-        # Group draws children in append order, later on top, and an opaque
-        # palette entry would paint a 128x39 black rectangle over all four
-        # legend rows -- the whole screen's content. The previous layout (a
-        # 94x22 bitmap at y=40) was immune to this by accident, since it sat
-        # clear of every label and opacity never mattered.
-        pal.make_transparent(0)
         self.group.append(self.header)
         self.group.append(self.focus)
-        self.group.append(displayio.TileGrid(self.map_bmp, pixel_shader=pal,
-                                             x=0, y=MAP_Y))
-        for r in self.rows:
-            self.group.append(r)
-        # Lit pixels currently on the bitmap, so set_gutters can paint the
-        # difference rather than clear and repaint. See km_deck.gutter_pixels.
-        self._lit = set()
         display.root_group = self.group
 
     def set_header(self, text):
@@ -53,29 +30,6 @@ class Screen:
     def set_focus(self, text):
         self.focus.text = text[:WIDTH_CHARS]
 
-    def set_legend(self, rows):
-        for i, r in enumerate(self.rows):
-            r.text = rows[i] if i < len(rows) else ""
-
-    def set_gutters(self, lit):
-        """Paint the DIFFERENCE against what is already on the bitmap.
-
-        Never a fill(0) first: displayio refreshes the panel on its own schedule
-        (auto_refresh is on), so a clear-then-repaint hands it a blank frame to
-        scan out, which is what reads as a flicker. An unchanged frame writes
-        nothing at all.
-        """
-        for x, y in self._lit - lit:
-            self.map_bmp[x, y] = 0
-        for x, y in lit - self._lit:
-            self.map_bmp[x, y] = 1
-        self._lit = lit
-
     def idle_card(self):
         self.set_header("keymaker")
         self.focus.text = "no link"
-        self.set_legend([""] * km_deck.LEGEND_ROWS)
-        # Clear the gutters too: with the link down the deck they describe is
-        # stale, and leaving them lit beside "no link" claims windows we can no
-        # longer see.
-        self.set_gutters(set())

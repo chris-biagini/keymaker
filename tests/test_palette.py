@@ -118,3 +118,54 @@ def test_deck_key_color_pulses_a_bell_between_live_and_focused():
     hi = kp.deck_key_color("bell", "e16000", 1.0)
     assert lo == kp.deck_key_color("live", "e16000", 0.0)
     assert hi == kp.deck_key_color("focused", "e16000", 0.0)
+
+
+# ---- split deck: top-half workspace keys, bottom-half window keys ----------
+
+def test_ws_key_color_uses_the_workspace_hue_for_active_and_occupied():
+    pal = {"accent": "FF0000", "red": "00FF00"}
+    assert kp.ws_key_color("active", "e16000", pal) == kp.hex_to_int("e16000")
+    assert kp.ws_key_color("occupied", "e16000", pal) == \
+        kp.scale(kp.hex_to_int("e16000"), kp.OCCUPIED_SCALE)
+
+
+def test_ws_key_color_urgent_and_empty_ignore_the_workspace_hue():
+    # Urgency is an alert, not an identity: it must look the same on every key.
+    pal = {"accent": "FF0000", "red": "00FF00"}
+    assert kp.ws_key_color("urgent", "e16000", pal, 1.0) == \
+        kp.key_color("urgent", pal, 1.0)
+    assert kp.ws_key_color("empty", "e16000", pal) == 0
+
+
+def test_ws_key_color_without_a_hue_falls_back_to_theme_accent():
+    pal = {"accent": "FF0000", "red": "00FF00"}
+    assert kp.ws_key_color("active", None, pal) == kp.key_color("active", pal)
+
+
+def test_ctx_key_color_empty_slot_is_off():
+    assert kp.ctx_key_color(None, {}) == 0
+
+
+def test_ctx_key_color_active_full_others_dimmed():
+    pal = {"red": "00FF00"}
+    on = kp.ctx_key_color({"c": "e16000", "active": True, "bell": False}, pal)
+    off = kp.ctx_key_color({"c": "e16000", "active": False, "bell": False}, pal)
+    assert on == kp.hex_to_int("e16000")
+    assert off == kp.scale(kp.hex_to_int("e16000"), kp.OCCUPIED_SCALE)
+
+
+def test_ctx_key_color_bell_pulses_red_regardless_of_identity_hue():
+    pal = {"red": "00FF00"}
+    hi = kp.ctx_key_color({"c": "e16000", "active": False, "bell": True}, pal, 1.0)
+    lo = kp.ctx_key_color({"c": "e16000", "active": False, "bell": True}, pal, 0.0)
+    assert hi == 0x00FF00
+    assert lo == kp.scale(0x00FF00, kp.urgent_factor(0.0))
+
+
+def test_ctx_key_color_missing_hue_stays_dark_but_a_bell_still_alerts():
+    # Fail closed on colour, never on the alert: an item that arrives without
+    # an identity hue renders off, unless it is ringing.
+    pal = {"red": "00FF00"}
+    assert kp.ctx_key_color({"c": None, "active": True, "bell": False}, pal) == 0
+    assert kp.ctx_key_color({"c": None, "active": False, "bell": True}, pal, 1.0) \
+        == 0x00FF00

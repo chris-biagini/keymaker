@@ -65,6 +65,39 @@ def key_color(state, pal, phase=0.0):
     return 0
 
 
+def ws_key_color(state, ws_hex, pal, phase=0.0):
+    """Top-half key: the workspace's colorhash hue for active/occupied.
+
+    Urgent and empty ignore the hue on purpose -- urgency is an alert, not an
+    identity, and must look the same on every key. No hue at all (unnamed
+    workspace, missing palette.json) falls back to the theme accent.
+    """
+    if ws_hex is None or state in ("urgent", "empty"):
+        return key_color(state, pal, phase)
+    c = hex_to_int(ws_hex)
+    if state == "active":
+        return c
+    if state == "occupied":
+        return scale(c, OCCUPIED_SCALE)
+    return 0
+
+
+def ctx_key_color(item, pal, phase=0.0):
+    """Bottom-half key for one ctx item ({"c", "active", "bell"}); None -> off.
+
+    Fail closed on colour, never on the alert: an item without an identity hue
+    renders dark, unless it is ringing -- a lost bell is worse than a lost hue.
+    """
+    if item is None:
+        return 0
+    if item.get("bell"):
+        return scale(_c(pal, "red"), urgent_factor(phase))
+    if not item.get("c"):
+        return 0
+    c = hex_to_int(item["c"])
+    return c if item.get("active") else scale(c, OCCUPIED_SCALE)
+
+
 # ---- deck key states (spec section 5.3) ------------------------------------
 # Hue carries workspace identity and NOTHING else. States differ by brightness
 # and animation only -- which is also the only encoding that survives Chris's
