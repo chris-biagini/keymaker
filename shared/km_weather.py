@@ -69,6 +69,21 @@ def wall_layout(order):
     return out
 
 
+def submap_badge(submap, max_len):
+    """Compose the " [name] " submap badge, or "" when it must be dropped.
+
+    Lives here rather than at the displayio edge because it is pure string
+    logic and the drawing edge is not host-testable. The badge is
+    right-anchored at a FIXED position that already reserves REC's corner,
+    so the two can never contend: the only reason to drop it is a name too
+    long to fit in the space left of that anchor. `max_len` is that budget
+    in characters, computed from the panel geometry by the caller.
+    """
+    if not submap or len(submap) > max_len:
+        return ""
+    return " [" + submap + "] "
+
+
 MARQUEE_MS = 600
 
 

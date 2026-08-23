@@ -28,12 +28,22 @@ DIGIT_SEGS = {
 }
 
 
+# Seven-segment "1" is B+C only, so it renders hard against the right edge of
+# its 14-wide cell. On this display the numeral's *position* carries meaning
+# (the big one sits in the left field, the smalls in a row), and a right-hung
+# stroke reads as shifted against its neighbours -- and pushes the big "1"
+# toward the middle of the panel. Slide its two segments left so the stroke is
+# centred in the cell instead. Purely cosmetic; every other digit is untouched.
+COL_SHIFT = {1: (W - T) // 2}
+
+
 def render(digit):
     rows = [0] * H
+    shift = COL_SHIFT.get(digit, 0)
     for seg in DIGIT_SEGS[digit]:
         r0, r1, c0, c1 = SEGMENTS[seg]
         for r in range(r0, r1):
-            for c in range(c0, c1):
+            for c in range(c0 - shift, c1 - shift):
                 rows[r] |= 1 << c
     return tuple(rows)
 

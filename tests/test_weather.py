@@ -2,7 +2,8 @@ import random
 
 from km_weather import (SCREEN_W, SCREEN_H, BIG_W, BIG_H, SMALL_W, SMALL_H,
                         weather, update_stamps, bell_order, wall_layout,
-                        MARQUEE_MS, marquee_x, RainField, FrameClock)
+                        submap_badge, MARQUEE_MS, marquee_x, RainField,
+                        FrameClock)
 
 
 def plain_diff(a, b):
@@ -88,6 +89,20 @@ def test_wall_layout_smalls_are_evenly_spaced():
 
 def test_wall_layout_empty():
     assert wall_layout([]) == []
+
+
+def test_submap_badge_composes_with_brackets_and_padding():
+    assert submap_badge("resize", 11) == " [resize] "
+
+
+def test_submap_badge_boundary_is_exact():
+    # 11 fits, 12 does not -- the pad's _SUBMAP_MAX is 11 characters.
+    assert submap_badge("a" * 11, 11) == " [aaaaaaaaaaa] "
+    assert submap_badge("a" * 12, 11) == ""
+
+
+def test_submap_badge_empty_name_is_dropped():
+    assert submap_badge("", 11) == ""
 
 
 def test_marquee_enters_from_right_edge():

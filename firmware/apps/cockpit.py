@@ -20,6 +20,9 @@ class Cockpit(App):
         self.ws = {"active": 1, "occupied": [], "urgent": [], "colors": {},
                    "names": {}}
         self.ctx = {"t": "ctx", "items": []}
+        # `win` and `ws["names"]` are accepted and ignored: the daemon still
+        # sends both (the protocol is unchanged) but the weather display has
+        # no consumer for either. Don't go hunting for one.
         self.win = {"cls": "", "title": ""}
         self.flags = {"submap": "", "screencast": False}
         self.palette = dict(km_palette.DEFAULT)
@@ -37,8 +40,10 @@ class Cockpit(App):
 
     def on_show(self):
         self.tracker = KeyTracker(hold_ms=400, diff=ticks_diff)
-        # A ledtest repaints via on_show; a stale cache would leave that debug
-        # frame (LEDs) or a stale OLED frame stuck instead of being redrawn.
+        # A ledtest repaints the strip behind our back; a stale cache would
+        # leave that debug frame stuck instead of being redrawn. The OLED
+        # needs no equivalent reset -- ledtest never touches the panel, so
+        # the Screen's caches still describe what is on it.
         self._led_frame = [None] * KEYS
         self._draw_all(ticks_ms())
 
@@ -114,6 +119,8 @@ class Cockpit(App):
         # set_bells BEFORE set_weather: the wall must be populated before the
         # weather flip reveals it, or the panel can scan out an empty frame.
         self.screen.set_bells(km_weather.bell_order(self._stamps, ticks_diff))
+        # link_up=True is a literal, not an oversight: the link-down case
+        # returned above, so by here the link is up by construction.
         self.screen.set_weather(km_weather.weather(urgent, True))
         self.screen.set_flags(bool(self.flags.get("screencast")),
                               self.flags.get("submap") or "")

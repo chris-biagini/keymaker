@@ -96,24 +96,23 @@ def _digit_bitmap(rows, scale):
     return bmp
 
 
-def _rain_sheet(font):
-    """Tile sheet from terminalio glyphs: bank 0 bright, bank 1 dimmed by a
-    checkerboard mask (the 1-bit stand-in for 50% gray). Built once at boot.
+def _fill_rain_sheet(sheet, font, gw, gh, n):
+    """Copy each RAIN_GLYPHS glyph into the bright and dim banks.
 
-    Tile 0 is a deliberate blank so the "off" kind is an ordinary tile write
-    rather than a special case -- nothing ever clears a live bitmap here.
+    This is the part that reaches into `terminalio.FONT`'s internals:
+    `glyph.bitmap` is assumed to be the font's shared sheet (not a per-glyph
+    bitmap), `glyph.tile_index` to index into it, and the sheet's width to be
+    an exact multiple of the bounding box width. Those hold for `BuiltinFont`
+    on the builds we ship against, but they are C-module implementation
+    details rather than documented API -- hence the caller's guard.
     """
-    box = font.get_bounding_box()
-    gw, gh = box[0], box[1]
-    n = len(RAIN_GLYPHS)
-    sheet = displayio.Bitmap(gw * (1 + 2 * n), gh, 2)
     for i, ch in enumerate(RAIN_GLYPHS):
         glyph = font.get_glyph(ord(ch))
         if glyph is None:
             continue          # missing glyph degrades to a blank tile
-        # glyph.bitmap is the font's shared sheet; locate this glyph's tile
-        # from tile_index against the sheet's real geometry -- the layout
-        # (strip vs grid) is an implementation detail we must not assume.
+        # Locate this glyph's tile from tile_index against the sheet's real
+        # geometry -- the layout (strip vs grid) is an implementation detail
+        # we must not assume.
         src = glyph.bitmap
         per_row = src.width // gw
         sx = (glyph.tile_index % per_row) * gw
@@ -126,6 +125,36 @@ def _rain_sheet(font):
                     # in every tile and the dither stays coherent on screen.
                     if (x + y) % 2 == 0:
                         sheet[(1 + n + i) * gw + x, y] = 1      # dim bank
+
+
+def _rain_sheet(font):
+    """Tile sheet from terminalio glyphs: bank 0 bright, bank 1 dimmed by a
+    checkerboard mask (the 1-bit stand-in for 50% gray). Built once at boot.
+
+    Tile 0 is a deliberate blank so the "off" kind is an ordinary tile write
+    rather than a special case -- nothing ever clears a live bitmap here.
+
+    Degrades rather than raises: if the font internals `_fill_rain_sheet`
+    relies on differ on this build, the sheet is returned all-blank and the
+    rain is silently disabled (a REPL line says so). Everything else on the
+    panel keeps working. This is deliberately unlike a missing digit asset,
+    which fails loud per the design spec section 7 -- a committed asset going
+    missing is a deploy bug, whereas font internals varying by build is a
+    runtime condition, and `Screen()` is constructed outside every `try` in
+    `pad/framework.py`, so raising here means no OLED, no LEDs, no keys and
+    no link until the pad is re-deployed. A rainless pad that still answers
+    "what is ringing right now" beats a dark one.
+    """
+    box = font.get_bounding_box()
+    gw, gh = box[0], box[1]
+    n = len(RAIN_GLYPHS)
+    sheet = displayio.Bitmap(gw * (1 + 2 * n), gh, 2)
+    try:
+        _fill_rain_sheet(sheet, font, gw, gh, n)
+    except Exception as err:      # noqa: BLE001 -- bare-ish on purpose, above
+        # A partly-filled sheet is fine: every tile is independent and an
+        # unwritten one is simply blank. No re-allocation, no retry.
+        print("rain disabled: terminalio glyph layout unexpected:", err)
     return sheet, gw, gh, n
 
 
@@ -296,16 +325,17 @@ class Screen:
         if (rec, submap) == self._flags:
             return
         self._flags = (rec, submap)
-        # Submap yields on collision: " [name] " at 6px/char, right-anchored
-        # at _SUBMAP_RIGHT, must stay on screen left of REC's reserved corner.
-        # The anchor is fixed whether or not REC is showing, so the badge
-        # never reflows -- it is simply dropped when it will not fit.
+        # " [name] " at 6px/char, right-anchored at _SUBMAP_RIGHT, which
+        # already reserves REC's corner -- so the two badges never contend
+        # and the anchor is fixed whether or not REC is showing. The badge
+        # never reflows; it is simply dropped when the name will not fit.
+        # The fit test and composition live in km_weather.submap_badge so
+        # they are host-testable (this file is not).
         # Label.text has no equality short-circuit (docs/pad-timing.md
         # section 5), so the text write goes through its own cache rather
         # than the flags tuple: two different flag tuples can want the same
         # badge text.
-        text = " [" + submap + "] " if submap and len(submap) <= _SUBMAP_MAX \
-            else ""
+        text = km_weather.submap_badge(submap, _SUBMAP_MAX)
         self._display.auto_refresh = False
         try:
             _set_hidden(self._rec, not rec)
