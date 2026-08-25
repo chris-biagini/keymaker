@@ -1,11 +1,23 @@
 import asyncio
+import json
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 
 import pytest
 
 from keymakerd import tmux
+
+
+LOCAL = [{
+    "session": "oracle",
+    "address": "0xabc",
+    "pid": 123,
+    "workspace": {"id": 3, "name": "oracle"},
+    "class": "kitty",
+    "focusHistoryID": 0,
+}]
 
 
 def test_select_uses_exact_session_match():
@@ -93,3 +105,70 @@ def test_parse_deck_windows_skips_malformed_and_unparseable_index():
 def test_deck_format_requests_window_id():
     assert "#{window_id}" in tmux.DECK_FORMAT
     assert "#{window_bell_flag}" in tmux.DECK_FORMAT
+
+
+def test_local_clients_command_uses_installed_helper():
+    assert tmux.LOCAL_CLIENTS_COMMAND == Path.home() / ".local/bin/tmux-local-clients"
+
+
+def test_parse_local_clients_accepts_contract():
+    assert tmux.parse_local_clients(json.dumps(LOCAL)) == LOCAL
+
+
+def test_parse_local_clients_accepts_empty_array():
+    assert tmux.parse_local_clients("[]") == []
+
+
+@pytest.mark.parametrize("out", [
+    "not json",
+    json.dumps({}),
+    json.dumps(["not an object"]),
+    json.dumps([{}]),
+    json.dumps([{**LOCAL[0], "session": ""}]),
+    json.dumps([{**LOCAL[0], "address": ""}]),
+    json.dumps([{**LOCAL[0], "pid": True}]),
+    json.dumps([{**LOCAL[0], "pid": "123"}]),
+    json.dumps([{**LOCAL[0], "pid": 0}]),
+    json.dumps([{**LOCAL[0], "pid": -1}]),
+    json.dumps([{**LOCAL[0], "workspace": []}]),
+    json.dumps([{**LOCAL[0], "workspace": {"id": True, "name": "oracle"}}]),
+    json.dumps([{**LOCAL[0], "workspace": {"id": "3", "name": "oracle"}}]),
+    json.dumps([{**LOCAL[0], "workspace": {"id": 3}}]),
+    json.dumps([{**LOCAL[0], "workspace": {"id": 3, "name": 4}}]),
+    json.dumps([{**LOCAL[0], "class": None}]),
+    json.dumps([{**LOCAL[0], "focusHistoryID": False}]),
+    json.dumps([{**LOCAL[0], "focusHistoryID": "0"}]),
+    json.dumps([{**LOCAL[0], "focusHistoryID": -1}]),
+])
+def test_parse_local_clients_rejects_invalid_contract(out):
+    with pytest.raises(ValueError):
+        tmux.parse_local_clients(out)
+
+
+@pytest.mark.parametrize("snapshot", [LOCAL, []])
+def test_list_local_clients_returns_valid_snapshot(snapshot):
+    async def fake():
+        return 0, json.dumps(snapshot)
+
+    assert asyncio.run(tmux.list_local_clients(run=fake)) == snapshot
+
+
+def test_list_local_clients_returns_none_on_nonzero_exit():
+    async def fake():
+        return 1, json.dumps(LOCAL)
+
+    assert asyncio.run(tmux.list_local_clients(run=fake)) is None
+
+
+def test_list_local_clients_returns_none_on_oserror():
+    async def fake():
+        raise OSError("helper unavailable")
+
+    assert asyncio.run(tmux.list_local_clients(run=fake)) is None
+
+
+def test_list_local_clients_returns_none_on_invalid_output():
+    async def fake():
+        return 0, "not json"
+
+    assert asyncio.run(tmux.list_local_clients(run=fake)) is None
