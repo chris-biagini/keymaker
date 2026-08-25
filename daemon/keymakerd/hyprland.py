@@ -170,7 +170,6 @@ class HyprState:
         self.cls = ""
         self.title = ""
         self.addr = ""
-        self.fg = {}          # ws id -> {"addr", "cls"} best ws-* client
         self.submap = ""
         self.screencast = False
         self._urgent_addrs = set()
@@ -220,23 +219,6 @@ class HyprState:
         # are looking at the workspace that rang, so the set is not merely
         # accumulated -- both the ws message's urgent list and deck_bells read it.
         urgent = sorted({addr_ws[a] for a in self._urgent_addrs})
-        # Per-workspace ws-* client, for the workspace-aware bottom deck.
-        # focusHistoryID 0 is the focused window, ascending = less recent, so the
-        # lowest id per workspace is "the terminal you were most recently in there".
-        # Daemon-internal (drives ctx polling and tap focus), never sent to the
-        # pad, so it is deliberately NOT part of the changed-state comparison.
-        fg = {}
-        for c in clients:
-            if not str(c.get("class", "")).startswith("ws-"):
-                continue
-            ws_id = c.get("workspace", {}).get("id")
-            if ws_id is None:
-                continue
-            hist = c.get("focusHistoryID", 1 << 30)
-            if ws_id not in fg or hist < fg[ws_id][0]:
-                fg[ws_id] = (hist, {"addr": str(c.get("address", "")),
-                                    "cls": str(c.get("class", ""))})
-        self.fg = {ws: entry for ws, (_, entry) in fg.items()}
         colors = {}
         names = {}
         for w in workspaces:
@@ -276,7 +258,10 @@ class HyprState:
 # Terminals qualify on both counts: a tmux window rings via window_bell_flag, a
 # bare terminal rings via Hyprland's bell event (foot.ini [bell] urgent=yes).
 # A browser does neither, and three of them would eat a quarter of the deck.
-TERMINAL_CLASSES = ("foot", "footclient", "alacritty", "kitty", "ghostty")
+TERMINAL_CLASSES = (
+    "foot", "footclient", "alacritty", "kitty", "ghostty",
+    "com.mitchellh.ghostty",
+)
 
 WS_ID_LAST = 1 << 30      # sorts after any real Hyprland workspace id
 
@@ -314,20 +299,13 @@ def _is_terminal(cls):
 CTX_KEYS = 6      # the bottom half of the pad
 
 
-def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=frozenset(),
-                fallback=None):
+def ctx_windows(tmux_windows, clients, associations, active, pal, focused_addr="",
+                bells=frozenset()):
     """The bottom deck: windows on workspace id `active` that earn a key.
 
-    tmux windows of the workspace's ws-* sessions come first, by (session,
-    index); sessionless terminals follow, by address. At most CTX_KEYS items.
-
-    `fallback` is an optional (session, client_addr) pair tried when the
-    class-derived sessions match no tmux windows at all. A foot client's
-    app-id freezes at launch, so `ws-colorhash` can sit on a workspace whose
-    terminal is long since re-attached to another session; the workspace
-    label's session name is the rename-resilient second guess cockpit v2
-    shipped with (fcdb0a6), and the class-derived candidate still wins when
-    it matches -- same ordering as v2.
+    tmux windows from explicitly associated local clients come first, by
+    (session, index); sessionless terminals follow, by address. At most
+    CTX_KEYS items.
 
     Color is identity, and identity is the NAME: a tmux window wears
     colorhash(window name), so it keeps its hue across a move, a swap and a
@@ -348,15 +326,16 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
     client's `addr` (focus the terminal first, then select-window), or just
     `addr` for a bare terminal.
     """
-    sessions = {}     # session name -> client address, active workspace only
-    used_addrs = set()
-    for c in clients:
-        cls = str(c.get("class", ""))
-        if not cls.startswith("ws-"):
+    associated_addrs = {a["address"] for a in associations}
+    chosen = {}
+    for assoc in associations:
+        if _ws_sort_id(assoc.get("workspace")) != active:
             continue
-        used_addrs.add(str(c.get("address", "")))
-        if _ws_sort_id(_ws_obj(c)) == active:
-            sessions[cls[3:]] = str(c.get("address", ""))
+        key = assoc["session"]
+        rank = (assoc["focusHistoryID"], assoc["address"])
+        if key not in chosen or rank < chosen[key][0]:
+            chosen[key] = (rank, assoc)
+    sessions = {session: pair[1]["address"] for session, pair in chosen.items()}
 
     entries = []
 
@@ -371,11 +350,9 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
                             "c": name_color(w["n"], pal)})
 
     add_tmux(sessions)
-    if not entries and fallback is not None:
-        add_tmux({fallback[0]: fallback[1]})
     for c in sorted(clients, key=lambda c: str(c.get("address", ""))):
         addr = str(c.get("address", ""))
-        if (addr in used_addrs or not _is_terminal(c.get("class"))
+        if (addr in associated_addrs or not _is_terminal(c.get("class"))
                 or _ws_sort_id(_ws_obj(c)) != active):
             continue
         entries.append({"id": "hypr:" + addr,
@@ -388,10 +365,10 @@ def ctx_windows(tmux_windows, clients, active, pal, focused_addr="", bells=froze
     return entries
 
 
-def deck_bells(tmux_windows, urgent_addrs, clients):
+def deck_bells(tmux_windows, urgent_addrs, associations):
     """Window ids with an unacked bell. Spec section 6.1.
 
-    A single BEL inside a ws-* terminal fires BOTH channels: tmux sets
+    A single BEL inside an associated terminal fires BOTH channels: tmux sets
     window_bell_flag, and foot rings the system bell for the surrounding client,
     which Hyprland emits as `bell`. The tmux flag names the exact window; the
     Hyprland event names only the terminal. So where a session exists the tmux
@@ -399,10 +376,9 @@ def deck_bells(tmux_windows, urgent_addrs, clients):
     light the right key and smear across every key of that session.
     """
     out = {w["id"] for w in tmux_windows if w.get("bell")}
-    ws_addrs = {str(c.get("address", "")).removeprefix("0x")
-                for c in clients if str(c.get("class", "")).startswith("ws-")}
+    associated = {str(a["address"]).removeprefix("0x") for a in associations}
     for addr in urgent_addrs:
-        if addr in ws_addrs:
-            continue
-        out.add("hypr:0x" + addr)
+        normalized = str(addr).removeprefix("0x")
+        if normalized not in associated:
+            out.add("hypr:0x" + normalized)
     return out

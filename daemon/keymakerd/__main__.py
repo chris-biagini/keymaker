@@ -46,6 +46,7 @@ class Supervisor:
         self._refresh_wanted = asyncio.Event()
         self._instance = None
         self._tasks = set()
+        self._resolver_failed = False
 
     def _spawn(self, coro, what):
         task = asyncio.ensure_future(coro)
@@ -199,28 +200,30 @@ class Supervisor:
             if not self.state.clients:
                 return          # no Hyprland snapshot yet; a wipe here would be a lie
             twins = await tmux.list_deck_windows()
+            tmux_available = twins is not None
             if twins is None:
                 # tmux unavailable (server down) is NOT "tmux has no windows":
                 # a bare terminal earns a key purely from state.clients and has
                 # nothing to do with tmux's health. Continue with an empty tmux
                 # side so the sessionless keys still render.
                 twins = []
+            associations = await tmux.list_local_clients()
+            if associations is None:
+                if not self._resolver_failed:
+                    print("keymakerd: tmux-local-clients failed", flush=True)
+                self._resolver_failed = True
+                associations = []
+            else:
+                self._resolver_failed = False
+
+            # Without authoritative tmux windows, treat terminals as sessionless
+            # and retain coarse bells rather than hiding their only alert.
+            effective_associations = associations if tmux_available else []
             bells = hyprland.deck_bells(twins, self.state._urgent_addrs,
-                                        self.state.clients)
-            # Rename-resilient fallback: a client's app-id freezes at launch,
-            # so the workspace LABEL's session name is the second guess when
-            # the class-derived session matches nothing (see ctx_windows).
-            fallback = None
-            label = self.state.names.get(str(self.state.active))
-            client = self.state.fg.get(self.state.active)
-            if label and client:
-                session = hyprland.session_name(label)
-                if session:
-                    fallback = (session, client["addr"])
-            items = hyprland.ctx_windows(twins, self.state.clients,
-                                         self.state.active, hyprland.led_palette(),
-                                         focused_addr=self.state.addr, bells=bells,
-                                         fallback=fallback)
+                                        effective_associations)
+            items = hyprland.ctx_windows(
+                twins, self.state.clients, effective_associations, self.state.active,
+                hyprland.led_palette(), focused_addr=self.state.addr, bells=bells)
             self.ctx_items = items
             msg = {"t": "ctx", "items": [
                 {"n": it["n"][:CTX_NAME_MAX], "c": it["c"],

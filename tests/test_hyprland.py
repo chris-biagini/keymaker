@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from keymakerd import hyprland
 from keymakerd.hyprland import HyprState, find_instance_dir, parse_event
 
@@ -176,34 +178,6 @@ def test_ws_color_hashes_sanitized_name():
     assert ws_color("wacky sax") == ws_color("wacky-sax")
 
 
-FG_CLIENTS = [
-    {"address": "0xaaa", "class": "firefox", "workspace": {"id": 2}, "focusHistoryID": 0},
-    {"address": "0xbbb", "class": "ws-mirepoix", "workspace": {"id": 2}, "focusHistoryID": 3},
-    {"address": "0xccc", "class": "ws-scratch", "workspace": {"id": 2}, "focusHistoryID": 1},
-    {"address": "0xddd", "class": "ws-oracle", "workspace": {"id": 3}, "focusHistoryID": 5},
-    {"address": "0xeee", "class": "foot", "workspace": {"id": 1}, "focusHistoryID": 4},
-]
-
-
-def test_refresh_builds_per_workspace_ws_map():
-    s = HyprState()
-    s.refresh(WORKSPACES, ACTIVE_WS, WIN, FG_CLIENTS)
-    # ws 2 has two ws- windows: lowest focusHistoryID (most recent) wins
-    assert s.fg == {
-        2: {"addr": "0xccc", "cls": "ws-scratch"},
-        3: {"addr": "0xddd", "cls": "ws-oracle"},
-    }                                       # plain foot and firefox excluded
-
-
-def test_refresh_fg_map_tolerates_missing_fields():
-    s = HyprState()
-    s.refresh(WORKSPACES, ACTIVE_WS, WIN, [
-        {"class": "ws-x"},                                  # no workspace
-        {"class": "ws-y", "workspace": {"id": 4}},          # no focusHistoryID, no address
-    ])
-    assert s.fg == {4: {"addr": "", "cls": "ws-y"}}
-
-
 def test_refresh_tracks_active_window_address():
     s = HyprState()
     s.refresh(WORKSPACES, ACTIVE_WS, {"class": "foot", "title": "t", "address": "0xf00"}, [])
@@ -222,37 +196,54 @@ def test_renameworkspace_triggers_refresh():
 
 
 DECK_CLIENTS = [
-    {"address": "0xaa", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xaa", "class": "kitty", "workspace": {"id": 2, "name": "mirepoix"}},
     {"address": "0xbb", "class": "firefox",     "workspace": {"id": 2, "name": "mirepoix"}},
     {"address": "0xcc", "class": "foot",        "workspace": {"id": 1, "name": "bonsai"}},
     {"address": "0xdd", "class": "foot",        "workspace": {"id": 4, "name": "4"}},
 ]
+DECK_ASSOCIATIONS = [{"session": "mirepoix", "address": "0xaa"}]
+
+
 def test_tmux_flag_wins_where_a_session_exists():
     twins = [{"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails",
               "active": False, "bell": True}]
     # One BEL fires BOTH channels: tmux flags the window and foot rings the
-    # system bell for the whole ws-* client. Counting both would smear the alert
+    # system bell for the associated client. Counting both would smear the alert
     # across every key of that session.
-    got = hyprland.deck_bells(twins, {"aa"}, DECK_CLIENTS)
+    got = hyprland.deck_bells(twins, {"aa"}, DECK_ASSOCIATIONS)
     assert got == {"tmux:@2"}
     assert "hypr:0xaa" not in got
 
 
 def test_hyprland_bell_is_authoritative_only_for_sessionless_clients():
-    assert hyprland.deck_bells([], {"cc"}, DECK_CLIENTS) == {"hypr:0xcc"}
+    assert hyprland.deck_bells([], {"cc"}, DECK_ASSOCIATIONS) == {"hypr:0xcc"}
+
+
+def test_deck_bells_suppresses_only_exact_association_addresses():
+    got = hyprland.deck_bells([], {"aa", "bb"}, DECK_ASSOCIATIONS)
+    assert got == {"hypr:0xbb"}
+
+
+def test_stale_ws_class_without_association_keeps_coarse_bell():
+    assert hyprland.deck_bells([], {"dd"}, []) == {"hypr:0xdd"}
 
 
 def test_no_bells_is_an_empty_set_not_none():
-    assert hyprland.deck_bells([], set(), DECK_CLIENTS) == set()
+    assert hyprland.deck_bells([], set(), DECK_ASSOCIATIONS) == set()
 
 
 PAL10 = ["c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09"]
 CTX_CLIENTS = [
-    {"address": "0xaa", "class": "ws-mirepoix", "workspace": {"id": 2, "name": "mirepoix"}},
+    {"address": "0xaa", "class": "kitty", "workspace": {"id": 2, "name": "mirepoix"}},
     {"address": "0xbb", "class": "firefox", "workspace": {"id": 2, "name": "mirepoix"}},
-    {"address": "0xcc", "class": "foot", "workspace": {"id": 2, "name": "mirepoix"}},
-    {"address": "0xdd", "class": "foot", "workspace": {"id": 1, "name": "bonsai"}},
+    {"address": "0xcc", "class": "foot", "workspace": {"id": 2, "name": "mirepoix"}, "title": "bare"},
+    {"address": "0xdd", "class": "com.mitchellh.ghostty", "workspace": {"id": 1, "name": "bonsai"}},
 ]
+CTX_ASSOCIATIONS = [{
+    "session": "mirepoix", "address": "0xaa", "pid": 100,
+    "workspace": {"id": 2, "name": "mirepoix"},
+    "class": "kitty", "focusHistoryID": 0,
+}]
 CTX_TWINS = [
     {"id": "tmux:@3", "s": "mirepoix", "i": 2, "n": "logs", "active": False, "bell": False},
     {"id": "tmux:@2", "s": "mirepoix", "i": 1, "n": "rails", "active": True, "bell": False},
@@ -261,7 +252,7 @@ CTX_TWINS = [
 
 
 def test_ctx_windows_is_the_active_workspace_only_tmux_first_by_index():
-    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
     assert [w["id"] for w in got] == ["tmux:@2", "tmux:@3", "hypr:0xcc"]
     # bonsai's tmux window and terminal live on ws 1: not this deck's business
 
@@ -272,11 +263,11 @@ def test_ctx_windows_colors_tmux_by_name_hash_terminals_by_key_position():
     # window's name. Golden cells: "rails" -> 0, "logs" -> 2. A sessionless
     # terminal has no tmux name for the bar to agree with (its title churns on
     # every cd), so it keeps the cell of the key it lands on.
-    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
     assert [w["c"] for w in got] == ["c00", "c02", "c02"]
     got2 = hyprland.ctx_windows(
         [{"id": "tmux:@4", "s": "mirepoix", "i": 5, "n": "x",
-          "active": False, "bell": False}], CTX_CLIENTS, 2, PAL10)
+          "active": False, "bell": False}], CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
     assert got2[0]["c"] == "c05"                # hash("x") -> cell 5; index 5 unconsulted
 
 
@@ -289,19 +280,20 @@ def test_ctx_windows_gives_two_windows_of_one_name_one_color():
               "active": False, "bell": False},
              {"id": "tmux:@2", "s": "mirepoix", "i": 2, "n": "logs",
               "active": False, "bell": False}]
-    got = hyprland.ctx_windows(twins, CTX_CLIENTS, 2, PAL10)
+    got = hyprland.ctx_windows(twins, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
     assert [w["c"] for w in got[:2]] == ["c02", "c02"]
 
 
 def test_ctx_windows_without_a_palette_sends_no_color():
-    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, [])
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, [])
     assert all(w["c"] is None for w in got)     # fail closed on color
 
 
 def test_ctx_windows_active_and_bell_flags():
     bells = {"tmux:@3", "hypr:0xcc"}
     got = {w["id"]: w for w in hyprland.ctx_windows(
-        CTX_TWINS, CTX_CLIENTS, 2, PAL10, focused_addr="0xcc", bells=bells)}
+        CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10,
+        focused_addr="0xcc", bells=bells)}
     assert got["tmux:@2"]["active"] is True     # tmux's own active flag
     assert got["tmux:@3"]["bell"] is True
     assert got["hypr:0xcc"]["active"] is True   # holds Hyprland focus
@@ -309,47 +301,50 @@ def test_ctx_windows_active_and_bell_flags():
 
 
 def test_ctx_windows_carries_jump_targets():
-    got = {w["id"]: w for w in hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, 2, PAL10)}
+    got = {w["id"]: w for w in hyprland.ctx_windows(
+        CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)}
     assert got["tmux:@2"]["s"] == "mirepoix" and got["tmux:@2"]["i"] == 1
-    assert got["tmux:@2"]["addr"] == "0xaa"     # the session's ws-* client
+    assert got["tmux:@2"]["addr"] == "0xaa"     # selected association address
     assert got["hypr:0xcc"]["addr"] == "0xcc"
 
 
-def test_ctx_windows_falls_back_to_the_workspace_label_session():
-    # A foot client's app-id freezes at launch, so `ws-colorhash` can sit on a
-    # workspace whose terminal is now attached to session `oracle`. When the
-    # class-derived session matches no tmux windows, fall back to the session
-    # named after the WORKSPACE LABEL -- the rename-resilient fallback cockpit
-    # v2 shipped with (fcdb0a6), reproduced live 2026-08-23.
-    clients = [{"address": "0xaa", "class": "ws-colorhash",
-                "workspace": {"id": 3, "name": "oracle"}}]
-    twins = [
-        {"id": "tmux:@29", "s": "oracle", "i": 1, "n": "power", "active": False,
-         "bell": False},
-        {"id": "tmux:@32", "s": "oracle", "i": 2, "n": "macropad", "active": True,
-         "bell": False},
-    ]
-    got = hyprland.ctx_windows(twins, clients, 3, PAL10,
-                               fallback=("oracle", "0xaa"))
-    assert [w["id"] for w in got] == ["tmux:@29", "tmux:@32"]
-    assert got[0]["addr"] == "0xaa"             # jump target is the real client
-    assert got[0]["s"] == "oracle"              # select-window targets the live session
+@pytest.mark.parametrize("terminal_class", ["kitty", "foot", "com.mitchellh.ghostty"])
+def test_ctx_windows_expands_associated_terminal_classes(terminal_class):
+    clients = [{"address": "0xaa", "class": terminal_class,
+                "workspace": {"id": 2}}]
+    associations = [{"session": "mirepoix", "address": "0xaa",
+                     "workspace": {"id": 2}, "focusHistoryID": 0}]
+    got = hyprland.ctx_windows(CTX_TWINS, clients, associations, 2, PAL10)
+    assert [w["id"] for w in got] == ["tmux:@2", "tmux:@3"]
 
 
-def test_ctx_windows_class_derived_session_wins_over_the_fallback():
-    # Parity with v2's candidate ordering: the class-derived session is tried
-    # first, the label fallback only fills a miss.
-    clients = [{"address": "0xaa", "class": "ws-colorhash",
-                "workspace": {"id": 3, "name": "oracle"}}]
-    twins = [
-        {"id": "tmux:@1", "s": "colorhash", "i": 1, "n": "lab", "active": True,
-         "bell": False},
-        {"id": "tmux:@2", "s": "oracle", "i": 1, "n": "power", "active": False,
-         "bell": False},
+def test_ctx_windows_filters_associations_to_active_workspace():
+    got = hyprland.ctx_windows(CTX_TWINS, CTX_CLIENTS, CTX_ASSOCIATIONS, 1, PAL10)
+    assert [w["id"] for w in got] == ["hypr:0xdd"]
+
+
+def test_ctx_windows_chooses_lowest_history_then_address_for_duplicate_session():
+    clients = [
+        {"address": "0xac", "class": "kitty", "workspace": {"id": 2}},
+        {"address": "0xab", "class": "foot", "workspace": {"id": 2}},
+        {"address": "0xaa", "class": "foot", "workspace": {"id": 2}},
     ]
-    got = hyprland.ctx_windows(twins, clients, 3, PAL10,
-                               fallback=("oracle", "0xaa"))
-    assert [w["id"] for w in got] == ["tmux:@1"]
+    associations = [
+        {"session": "mirepoix", "address": "0xac", "workspace": {"id": 2},
+         "focusHistoryID": 2},
+        {"session": "mirepoix", "address": "0xab", "workspace": {"id": 2},
+         "focusHistoryID": 1},
+        {"session": "mirepoix", "address": "0xaa", "workspace": {"id": 2},
+         "focusHistoryID": 1},
+    ]
+    got = hyprland.ctx_windows(CTX_TWINS, clients, associations, 2, PAL10)
+    assert got[0]["addr"] == "0xaa"
+    assert all(not item["id"].startswith("hypr:") for item in got)
+
+
+def test_ctx_windows_leaves_unmatched_terminal_sessionless():
+    got = hyprland.ctx_windows([], CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
+    assert [w["id"] for w in got] == ["hypr:0xcc"]
 
 
 def test_ctx_windows_survives_null_and_boolean_workspaces():
@@ -363,13 +358,13 @@ def test_ctx_windows_survives_null_and_boolean_workspaces():
         {"address": "0xcc", "class": "foot", "workspace": {"id": 2, "name": "y"},
          "title": "real"},
     ]
-    got = hyprland.ctx_windows([], clients, 2, PAL10)
+    got = hyprland.ctx_windows([], clients, [], 2, PAL10)
     assert [w["n"] for w in got] == ["real"]
 
 
 def test_ctx_windows_caps_at_six_keys():
     twins = [{"id": "tmux:@%d" % i, "s": "mirepoix", "i": i, "n": "w%d" % i,
               "active": False, "bell": False} for i in range(1, 9)]
-    got = hyprland.ctx_windows(twins, CTX_CLIENTS, 2, PAL10)
+    got = hyprland.ctx_windows(twins, CTX_CLIENTS, CTX_ASSOCIATIONS, 2, PAL10)
     assert len(got) == 6
     assert got[-1]["id"] == "tmux:@6"           # overflow drops from the end

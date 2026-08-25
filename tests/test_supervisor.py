@@ -136,13 +136,13 @@ def test_bottom_key_tap_focuses_client_then_selects_tmux_window(monkeypatch, tmp
         await asyncio.sleep(0.05)
         first = list(calls)
         calls.clear()
-        sup.state.addr = "0xfeet"                 # foot already focused
+        sup.state.addr = "0xfeet"                 # associated terminal already focused
         sup._on_pad_msg({"t": "key", "n": 7, "act": "tap"})
         await asyncio.sleep(0.05)
         return first, list(calls)
 
     unfocused, focused = asyncio.run(scenario())
-    # unfocused: focus the foot window FIRST, then select the tmux window
+    # unfocused: focus the associated terminal FIRST, then select the tmux window
     assert unfocused == [("hypr", "dispatch focuswindow address:0xfeet"),
                          ("select", "oracle", 1)]
     assert focused == [("select", "oracle", 2)]   # no focus hop when already there
@@ -244,8 +244,10 @@ def test_poll_ctx_builds_items_dedupes_and_reemits_on_change(monkeypatch, tmp_pa
     from keymakerd import hyprland as hyprmod
     from keymakerd import tmux as tmuxmod
 
-    CLIENTS = [{"class": "ws-mirepoix", "address": "0xaaa",
+    CLIENTS = [{"class": "kitty", "address": "0xaaa",
                 "workspace": {"id": 1, "name": "mirepoix"}}]
+    ASSOCIATIONS = [{"session": "mirepoix", "address": "0xaaa",
+                     "workspace": {"id": 1}, "focusHistoryID": 0}]
 
     async def scenario():
         windows = [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "rails",
@@ -254,7 +256,11 @@ def test_poll_ctx_builds_items_dedupes_and_reemits_on_change(monkeypatch, tmp_pa
         async def fake_list():
             return list(windows)
 
+        async def fake_clients():
+            return list(ASSOCIATIONS)
+
         monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
         monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00", "c01"])
         sup = _supervisor(tmp_path)
         sent = []
@@ -281,6 +287,8 @@ def test_poll_ctx_builds_items_dedupes_and_reemits_on_change(monkeypatch, tmp_pa
     assert ctx1[0]["items"] == [{"n": "1 rails", "c": "c00",
                                  "active": True, "bell": False}]
     assert items[0]["s"] == "mirepoix"            # targets stay daemon-side
+    assert items[0]["addr"] == "0xaaa"
+    assert set(ctx1[0]["items"][0]) == {"n", "c", "active", "bell"}
     assert "s" not in ctx1[0]["items"][0]         # ...and off the wire
     assert len([m for m in second if m["t"] == "ctx"]) == 1   # deduped
     assert len([m for m in third if m["t"] == "ctx"]) == 2    # the change re-emits
@@ -292,8 +300,12 @@ def test_poll_ctx_before_first_hypr_snapshot_is_a_no_op(monkeypatch, tmp_path):
     async def fake_list():
         return []
 
+    async def fake_clients():
+        return []
+
     async def scenario():
         monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
         sup = _supervisor(tmp_path)
         sent = []
         sup.link = _sent_link(sent)
@@ -314,8 +326,13 @@ def test_poll_ctx_survives_a_tmux_outage_without_blanking_bare_terminals(monkeyp
     async def fake_list_none():
         return None
 
+    async def fake_clients():
+        return [{"session": "home", "address": "0xbare",
+                 "workspace": {"id": 1}, "focusHistoryID": 0}]
+
     async def scenario():
         monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list_none)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
         monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00"])
         sup = _supervisor(tmp_path)
         sent = []
@@ -323,50 +340,105 @@ def test_poll_ctx_survives_a_tmux_outage_without_blanking_bare_terminals(monkeyp
         sup.state.clients = [{"class": "foot", "address": "0xbare",
                               "workspace": {"id": 1, "name": "home"}, "title": "bare"}]
         sup.state.active = 1
+        sup.state._urgent_addrs = {"bare"}
         await sup._poll_ctx()
-        return sent
+        return sent, sup.ctx_items
 
-    sent = asyncio.run(scenario())
+    sent, items = asyncio.run(scenario())
     ctx = [m for m in sent if m["t"] == "ctx"]
     assert len(ctx) == 1
     assert ctx[0]["items"] == [{"n": "bare", "c": "c00",
-                                "active": False, "bell": False}]
+                                "active": False, "bell": True}]
+    assert items[0]["id"] == "hypr:0xbare"
 
 
-def test_poll_ctx_passes_the_workspace_label_fallback(monkeypatch, tmp_path):
-    # Live repro 2026-08-23: client app-id ws-colorhash (frozen at launch) on
-    # workspace "oracle" whose terminal is attached to session "oracle". The
-    # poll must hand ctx_windows the label-derived session + the ws-* client's
-    # address so the bottom deck lights anyway.
+def test_poll_ctx_passes_an_ordinary_kitty_association(monkeypatch, tmp_path):
     from keymakerd import hyprland as hyprmod
     from keymakerd import tmux as tmuxmod
 
     async def fake_list():
         return [{"id": "tmux:@32", "s": "oracle", "i": 2, "n": "macropad",
-                 "active": True, "bell": False}]
+                  "active": True, "bell": False}]
+
+    async def fake_clients():
+        return [{"session": "oracle", "address": "0xaa",
+                 "workspace": {"id": 3}, "focusHistoryID": 0}]
 
     async def scenario():
         monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
         monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00", "c01"])
         sup = _supervisor(tmp_path)
         sent = []
         sup.link = _sent_link(sent)
-        sup.state.clients = [{"class": "ws-colorhash", "address": "0xaa",
-                              "workspace": {"id": 3, "name": "oracle"}}]
+        sup.state.clients = [{"class": "kitty", "address": "0xaa",
+                               "workspace": {"id": 3, "name": "oracle"}}]
         sup.state.active = 3
-        sup.state.names = {"3": "oracle"}
-        sup.state.fg = {3: {"addr": "0xaa", "cls": "ws-colorhash"}}
         await sup._poll_ctx()
         return sent, list(sup.ctx_items)
 
     sent, items = asyncio.run(scenario())
     (ctx,) = [m for m in sent if m["t"] == "ctx"]
-    # c00 is colorhash("macropad") against this 2-cell fake palette -- the color
-    # is incidental here (the fallback path is what's under test), but pinning it
-    # keeps a silent revert to index-keying from passing.
+    # c00 is colorhash("macropad") against this 2-cell fake palette.
     assert ctx["items"] == [{"n": "2 macropad", "c": "c00",
                              "active": True, "bell": False}]
     assert items[0]["addr"] == "0xaa"
+
+
+def test_poll_ctx_successful_empty_associations_leave_terminal_sessionless(monkeypatch, tmp_path):
+    from keymakerd import hyprland as hyprmod
+    from keymakerd import tmux as tmuxmod
+
+    async def fake_list():
+        return [{"id": "tmux:@1", "s": "legacy", "i": 1, "n": "shell",
+                 "active": True, "bell": False}]
+
+    async def fake_clients():
+        return []
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
+        monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00"])
+        sup = _supervisor(tmp_path)
+        sup.link = _sent_link([])
+        sup.state.clients = [{"class": "ws-legacy", "address": "0xaaa",
+                              "workspace": {"id": 1}, "title": "legacy"}]
+        await sup._poll_ctx()
+        return sup.ctx_items
+
+    items = asyncio.run(scenario())
+    assert [item["id"] for item in items] == ["hypr:0xaaa"]
+
+
+def test_poll_ctx_logs_resolver_failure_once_per_outage_and_recovers(
+        monkeypatch, tmp_path, capsys):
+    from keymakerd import tmux as tmuxmod
+
+    results = [None, None, [], None]
+
+    async def fake_list():
+        return []
+
+    async def fake_clients():
+        return results.pop(0)
+
+    async def scenario():
+        monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
+        sup = _supervisor(tmp_path)
+        sup.state.clients = [{"class": "foot", "address": "0xaaa",
+                              "workspace": {"id": 1}}]
+        for _ in range(4):
+            await sup._poll_ctx()
+        return sup
+
+    sup = asyncio.run(scenario())
+    assert capsys.readouterr().out.splitlines() == [
+        "keymakerd: tmux-local-clients failed",
+        "keymakerd: tmux-local-clients failed",
+    ]
+    assert sup._resolver_failed is True
 
 
 def test_poll_ctx_trims_names_for_the_wire(monkeypatch, tmp_path):
@@ -377,15 +449,20 @@ def test_poll_ctx_trims_names_for_the_wire(monkeypatch, tmp_path):
 
     async def fake_list():
         return [{"id": "tmux:@1", "s": "mirepoix", "i": 1, "n": "x" * 200,
-                 "active": False, "bell": False}]
+                  "active": False, "bell": False}]
+
+    async def fake_clients():
+        return [{"session": "mirepoix", "address": "0xaaa",
+                 "workspace": {"id": 1}, "focusHistoryID": 0}]
 
     async def scenario():
         monkeypatch.setattr(tmuxmod, "list_deck_windows", fake_list)
+        monkeypatch.setattr(tmuxmod, "list_local_clients", fake_clients)
         monkeypatch.setattr(hyprmod, "led_palette", lambda: ["c00"])
         sup = _supervisor(tmp_path)
         sent = []
         sup.link = _sent_link(sent)
-        sup.state.clients = [{"class": "ws-mirepoix", "address": "0xaaa",
+        sup.state.clients = [{"class": "kitty", "address": "0xaaa",
                               "workspace": {"id": 1, "name": "mirepoix"}}]
         sup.state.active = 1
         await sup._poll_ctx()
