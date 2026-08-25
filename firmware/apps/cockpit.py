@@ -1,6 +1,6 @@
 """Cockpit: the split deck. Keys 0-5 = workspaces 1-6 in their colorhash
-colors; keys 6-11 = windows on the active workspace (tmux windows of its ws-*
-session, then sessionless terminals); OLED = weather display (rain / bell
+colors; keys 6-11 = tmux windows associated with local terminals on the active
+workspace, then unassociated terminals; OLED = weather display (rain / bell
 wall / marquee, see docs/specs/2026-08-23-oled-weather-design.md)."""
 from adafruit_ticks import ticks_diff, ticks_ms
 

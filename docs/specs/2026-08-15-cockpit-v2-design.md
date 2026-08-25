@@ -1,5 +1,10 @@
 # Cockpit v2 — Split Deck, tmux Context, Bell Notifications, Identity OLED
 
+> **Terminal discovery superseded 2026-08-24:** The original `footguard-*`/`ws-*`
+> class-derived association was replaced by the terminal-agnostic
+> `tmux-local-clients` contract. The split-deck protocol, ordering, tap behavior,
+> colors, and bell semantics remain historical foundations.
+
 **Date:** 2026-08-15
 **Status:** Approved design, pre-plan
 **Builds on:** v1 foundation (PR #1, merged at `1bff9b4`) — Cockpit workspace deck,

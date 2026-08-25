@@ -17,18 +17,24 @@ A single app: **Cockpit**, the split deck.
   full-bright, occupied dimmed, urgent pulsing, empty dark. Tap to switch
   workspace; hold to move the focused window there silently.
 - **Bottom six keys = windows on the active workspace**: the tmux windows of
-  its `ws-*` session first (each in the colorhash color of its window NAME, the
-  same cell the tmux status bar paints), then sessionless terminals (which have
-  no stable name, so they take the cell of the key they land on). Focused
-  full-bright, others dimmed, bell pulsing. Tap to jump to that window.
+  sessions associated with local terminal windows first (each in the colorhash
+  color of its window NAME, the same cell the tmux status bar paints), then
+  unassociated terminals (which have no stable name, so they take the cell of
+  the key they land on). `tmux-local-clients` is the association authority, so
+  ordinary Kitty, foot, and Ghostty windows work without special classes or
+  launchers. Focused full-bright, others dimmed, bell pulsing. Tap to jump to
+  that window.
 - The OLED is a weather display: sparse digital rain while all is calm, and
   when terminal bells ring elsewhere, a wall of workspace numerals sized by
   recency — the newest bell largest. A workspace switch flashes that
   workspace's numeral, big and centred, for a moment; REC and submap badges
   overlay everything while the screen is being captured or a submap is
   active.
-- Urgency runs BEL → tmux → foot → Hyprland → pad, entirely in-band, so it
-  works the same over mosh as it does locally.
+- Urgency runs BEL through tmux and the local terminal/compositor to the pad,
+  entirely in-band, so it works the same over mosh as it does locally. For an
+  associated terminal, tmux's per-window bell replaces the coarse terminal
+  bell only when their exact Hyprland addresses match; this prevents duplicate
+  indications without hiding bells from unassociated terminals.
 - The knob is currently unassigned.
 
 ### Theme following
@@ -66,6 +72,9 @@ in [docs/specs/2026-08-23-oled-weather-design.md](docs/specs/2026-08-23-oled-wea
 - Adafruit MacroPad RP2040 flashed with CircuitPython 10.2.x
 - Linux host running Omarchy (3.x or 4.x) with Hyprland
 - Python ≥3.11 and `python-pyserial` on the host
+- One terminal-emulator process per window. Kitty single-instance mode, foot
+  server mode, Ghostty single-instance mode, and equivalent shared-process
+  arrangements cannot be associated reliably and are unsupported.
 
 ## Install
 
