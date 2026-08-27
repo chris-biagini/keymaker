@@ -158,17 +158,16 @@ def test_ws_color_is_none_without_a_palette(tmp_path, monkeypatch):
     assert hyprland.ws_color("mirepoix") is None
 
 
-def test_session_name_sanitizes_like_ws_attach():
-    # Twin of wsid_session_name in ~/oracle/scripts/workspace-identity-lib.
+def test_session_name_matches_the_bash_canonicalizer():
+    # Golden twin of wsid_session_name in ~/oracle/scripts/workspace-identity-lib.
     from keymakerd.hyprland import session_name
-    assert session_name("keymaker") == "keymaker"
-    assert session_name("wacky sax") == "wacky-sax"
-    assert session_name("a.b:c/d") == "a-b-c-d"
-    assert session_name(" x ") == "x"
-    assert session_name("note: draft") == "note-draft"
-    assert session_name("ch. 2 notes") == "ch-2-notes"
-    assert session_name("a..b") == "a-b"
-    assert session_name("foo. bar") == "foo-bar"
+
+    assert session_name("a.b:c/d#e") == "a-b-c-d-e"
+    assert session_name("a\tb\nc\x7fd") == "a-b-c-d"
+    assert session_name("a.#-b") == "a-b"
+    assert session_name(" .#x: ") == "x"
+    assert session_name("café-日本語") == "café-日本語"
+    assert session_name(" #.:/\t") == ""
 
 
 def test_ws_color_hashes_sanitized_name():

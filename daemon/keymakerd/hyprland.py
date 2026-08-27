@@ -54,13 +54,16 @@ def fnv1a32(text):
 
 
 def session_name(label):
-    """tmux/systemd-safe session name from a workspace label.
-    Ported from wsid_session_name in ~/oracle/scripts/workspace-identity-lib —
-    keep both in sync."""
-    s = label
-    for ch in ".:/":
-        s = s.replace(ch, "-")
-    s = "-".join(s.split())
+    """Canonical tmux/Hyprland task-space name.
+
+    Golden twin of wsid_session_name in ~/oracle/scripts/workspace-identity-lib:
+    ASCII controls/whitespace and . : / # become '-', repeated dashes collapse,
+    and edge dashes disappear. Keep both implementations byte-for-byte aligned.
+    """
+    s = "".join(
+        "-" if ord(ch) <= 32 or ord(ch) == 127 or ch in ".:/#" else ch
+        for ch in label
+    )
     while "--" in s:
         s = s.replace("--", "-")
     return s.strip("-")
