@@ -105,8 +105,8 @@ def test_snapshot_on_connect_and_top_key_dispatch(pad, tmp_path):
     for expected in ("hello", "ws", "win", "flags"):
         assert expected in types
     assert active == 3
-    assert "dispatch workspace 3" in dispatched
-    assert "dispatch movetoworkspacesilent 1" in dispatched
+    assert 'dispatch hl.dsp.focus({ workspace = "3" })' in dispatched
+    assert 'dispatch hl.dsp.window.move({ workspace = "1", follow = false })' in dispatched
 
 
 def test_bottom_key_tap_focuses_client_then_selects_tmux_window(monkeypatch, tmp_path):
@@ -143,7 +143,7 @@ def test_bottom_key_tap_focuses_client_then_selects_tmux_window(monkeypatch, tmp
 
     unfocused, focused = asyncio.run(scenario())
     # unfocused: focus the associated terminal FIRST, then select the tmux window
-    assert unfocused == [("hypr", "dispatch focuswindow address:0xfeet"),
+    assert unfocused == [("hypr", 'dispatch hl.dsp.focus({ window = "address:0xfeet" })'),
                          ("select", "oracle", 1)]
     assert focused == [("select", "oracle", 2)]   # no focus hop when already there
 
@@ -165,7 +165,9 @@ def test_bottom_key_tap_focuses_a_sessionless_terminal(monkeypatch, tmp_path):
         await asyncio.sleep(0.05)
         return list(calls)
 
-    assert asyncio.run(scenario()) == ["dispatch focuswindow address:0xbare"]
+    assert asyncio.run(scenario()) == [
+        'dispatch hl.dsp.focus({ window = "address:0xbare" })'
+    ]
 
 
 def test_bottom_key_edges_are_no_ops(monkeypatch, tmp_path):

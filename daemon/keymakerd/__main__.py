@@ -99,10 +99,16 @@ class Supervisor:
         elif t == "key":
             n = int(msg.get("n", 0))
             if 0 <= n < 6:                                # top half: workspaces 1-6
-                verb = "movetoworkspacesilent" if msg.get("act") == "hold" else "workspace"
-                if verb != "workspace":                   # holds are rare and destructive; log for forensics
-                    print(f"keymakerd: hold key {n} -> {verb} {n + 1}", flush=True)
-                self._spawn(self._dispatch(f"dispatch {verb} {n + 1}"), "dispatch")
+                workspace = n + 1
+                if msg.get("act") == "hold":
+                    # Holds are rare and destructive; log for forensics.
+                    print(f"keymakerd: hold key {n} -> movetoworkspacesilent {workspace}",
+                          flush=True)
+                    cmd = (f'dispatch hl.dsp.window.move({{ workspace = "{workspace}", '
+                           'follow = false })')
+                else:
+                    cmd = f'dispatch hl.dsp.focus({{ workspace = "{workspace}" }})'
+                self._spawn(self._dispatch(cmd), "dispatch")
             elif 6 <= n <= 11 and msg.get("act") == "tap":
                 self._spawn(self._activate_item(n - 6), "ctx-activate")
 
@@ -130,7 +136,8 @@ class Supervisor:
         item = items[offset]
         addr = item.get("addr")
         if addr and addr != self.state.addr:
-            await self._dispatch(f"dispatch focuswindow address:{addr}")
+            await self._dispatch(
+                f'dispatch hl.dsp.focus({{ window = "address:{addr}" }})')
         if "s" in item:
             if not await tmux.select_window(item["s"], item["i"]):
                 print(f"keymakerd: select-window {item['s']}:{item['i']} failed",
