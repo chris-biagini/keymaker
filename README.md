@@ -86,7 +86,31 @@ cd keymaker
 
 The installer prints one manual step: a udev rule (stable
 `/dev/keymaker-*` names, and it keeps ModemManager off the serial ports)
-that needs root to place.
+that needs root to place. A stock pad still shows its CIRCUITPY drive, so the
+first install works before the rule is in place; every later deploy needs it.
+
+## The CIRCUITPY drive is hidden
+
+`firmware/boot.py` calls `storage.disable_usb_drive()`, so the pad does not
+appear as removable storage. That keeps it off the desktop and it removes the
+deploy hazard in [docs/pad-timing.md](docs/pad-timing.md) — with no host mount,
+an rsync can no longer race CircuitPython's auto-reload into a read-only FAT.
+
+`./system/deploy-firmware.sh` gets in on its own: it asks the pad over the REPL
+serial channel to leave a `/.expose-drive` marker and hard reset. The next boot
+sees the marker, consumes it, and shows the drive for that one boot; the script
+copies, unmounts, and resets again to hide it. Deploying is still one command,
+and takes about 30 seconds for the two USB re-enumerations.
+
+Three ways back in if that path breaks, in order of reach:
+
+| Route | How | Gets you |
+|---|---|---|
+| Escape key | hold key 1 (top-left) while plugging in | the drive, this boot |
+| Safe mode | tap reset during the boot LED flash | no `boot.py`, no `code.py` |
+| BOOTSEL | hold BOOTSEL while plugging in | the ROM bootloader, reflash |
+
+So `boot.py` cannot lock you out of the pad.
 
 ## Status
 

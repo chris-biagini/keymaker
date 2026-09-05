@@ -155,6 +155,34 @@ serial port before the rsync, then firing one clean reload afterward. It also
 hardens against a stale read-only mount and excludes `__pycache__`. **This guard
 must stay.**
 
+Since 2026-09-05 `firmware/boot.py` hides the drive outright
+(`storage.disable_usb_drive()`), which removes the window rather than narrowing
+it: with no host mount in normal operation there is nothing to race. The guard
+still runs, because the deploy re-exposes the drive for exactly one boot.
+
+Recovering from a FAT that has already gone read-only needs the pad, not the
+host. Unmounting and remounting does not clear it — the medium is still
+presented write-protected, and CircuitPython cannot write it either. Only a hard
+reset re-presents it. The deploy script's read-only branch does that: reset back
+to hidden, then expose fresh, and it gives up after one retry.
+
+## 7a. A serial write is not a reset
+
+Two host-side operations look synchronous and are not.
+
+CircuitPython's USB CDC discards input written before it registers that the host
+has opened the port. A Ctrl-C sent immediately after `open()` is lost. This was
+invisible until the drive got hidden, because the deploy then depends on serial
+for control rather than convenience: `hide` failed on the first attempt every
+single time and succeeded on the retry. `system/pad-repl.py` settles for 500 ms
+after opening before its first write.
+
+And `microcontroller.reset()` returning does not mean the pad reset. Bytes
+leaving the host prove nothing. Both reset paths now wait for the serial device
+node to disappear, which only happens on a real USB re-enumeration, and
+`deploy-firmware.sh` separately confirms the drive is gone before it reports
+success.
+
 ## 8. Deliberate non-attempts
 
 - **No velocity sensitivity.** The key switches are on/off. A hardware limit, not
